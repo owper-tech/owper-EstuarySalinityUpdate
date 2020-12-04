@@ -1,0 +1,970 @@
+---
+title: "South Florida Coastal Salinity Status"
+author: "Point of Contact: Paul Julian (<Paul.Julian@FloridaDEP.gov>) and Alyssa Gilhooly (<Alyssa.Gilhooly@FloridaDEP.gov>)"
+output: 
+  html_document: 
+    toc: yes
+editor_options: 
+  chunk_output_type: console
+---
+
+`r paste("Updated",as.POSIXct(Sys.time(),"%Y-%m-%d %H:%M",tz=""))`
+
+This webpage is intended to inform Agency representatives on Stage elevation in Lake Okeechobee and status and condition of the Caloosahatchee Estuary, St. Lucie Estuary, and Florida Bay.
+
+**_Please note this analysis is using preliminary data and subject to change._** 
+```{r Libraries_paths_Dates,include=FALSE}
+rm(list=ls(all=T)); 
+#libraries
+library(AnalystHelper)
+library(dataRetrieval)
+library(lubridate)
+library(plyr)
+library(reshape)
+library(zoo)
+library(colorRamps)
+library(RcppRoll)
+
+library(maptools)
+library(classInt)
+library(GISTools)
+library(leaflet)
+
+#Paths
+# path="//Fldep1/OWPER/EVG/Programmatic/WaterQuality/R_Reports/Salinity"
+# data.path="./Data/"
+#GIS.path=paste(data.path,"/GIS/",sep="")
+
+#Current WY
+CurWY=as.numeric(ifelse(as.numeric(format(as.Date(Sys.time()),"%m"))>4,as.numeric(format(as.Date(Sys.time()),"%Y"))+1,format(as.Date(Sys.time()),"%Y")))
+CurWY
+
+## Stage Data
+TODAY=as.POSIXct(strptime(Sys.time(),"%F"),tz="EST")
+YEST=TODAY-duration(1,"days")
+End.Date=as.Date(Sys.time())+duration(1,"days")
+
+Start.Date=as.Date(paste(CurWY-2,05,01,sep="-"))
+Start.Date2=min(as.Date(Sys.time())-duration(35,"days"),as.Date(paste(CurWY-1,05,01,sep="-")))
+
+STG.SDate=paste(format(Start.Date,"%Y"),format(Start.Date,"%m"),format(Start.Date,"%d"),sep="")
+STG.EDate=paste(format(End.Date,"%Y"),format(End.Date,"%m"),format(End.Date,"%d"),sep="")
+
+#For Plots
+dates=c(Start.Date2,as.Date(Start.Date2+duration(366,"days")))
+xlim.vals=as.POSIXct(strptime(dates,"%Y-%m-%d"),tz="EST")
+xmaj=seq(xlim.vals[1],xlim.vals[2],by="2 months");xmin=seq(xlim.vals[1],xlim.vals[2],by="1 months")
+```
+
+
+
+### ***Lake Okeechobee Stage Elevation***
+
+```{r LakeO Data, warnings=FALSE,echo=FALSE,include=FALSE}
+#LORS
+data(LORS)
+LORS$Year=CurWY-1
+LORS$Date2=with(LORS,as.POSIXct(strptime(paste(Year,Month,Day,sep="-"),"%Y-%m-%d")))
+
+LORS2=LORS
+LORS2$Year=CurWY
+LORS2$Date2=with(LORS2,as.POSIXct(strptime(paste(Year,Month,Day,sep="-"),"%Y-%m-%d"),tz="EST"))
+
+LORS.gaph2Yrs=rbind(LORS,LORS2)
+rm(LORS,LORS2)
+LORS.gaph2Yrs$Date2=date.fun(LORS.gaph2Yrs$Date2)
+
+#Lake Okeechobee
+comp.dbkey=data.frame(DBKEY=c("N3466","06832"),Priority=c("P1","P2"))
+
+stg.da=data.frame()
+for(i in 1:nrow(comp.dbkey)){
+  tmp=DBHYDRO_daily(date.fun(paste(CurWY-3,"05-01",sep="-")),End.Date,comp.dbkey$DBKEY[i])
+  tmp$DBKEY=as.character(comp.dbkey$DBKEY[i])
+  stg.da=rbind(stg.da,tmp)
+}
+stg.da=merge(stg.da,comp.dbkey,"DBKEY")
+stg.da$DATE=date.fun(stg.da$Date)
+
+LakeO.xtab=cast(stg.da,DATE~Priority,value="Data.Value",mean)
+LakeO.xtab$Mean=with(LakeO.xtab,ifelse(is.na(P1)==T,P2,P1))
+if(is.na(subset(LakeO.xtab,DATE==YEST)$Mean)==T){
+  da.dbks=data.frame(SITE=c("L001","L005","L006","LZ40","S133TW","S352HW","S4TW"),DBKEY=c("16022","12509","12519","16265","15826","FF579","15732"),type="Daily")
+  tmp=DBHYDRO_daily(YEST-ddays(2),YEST,da.dbks$DBKEY)
+  tmp$DATE=date.fun(tmp$Date)
+  tmp2=DBHYDRO_breakpoint(YEST-ddays(2),YEST,"AI522")
+  tmp2$DATE=date.fun(tmp2$DATE)
+  tmp2.mean=ddply(tmp2,"DATE",summarise,Data.Value=round(mean(Data.Value,na.rm=T),2))
+  tmp2.mean$Station="S308HW"
+  
+  tmp.all=rbind(tmp[,c("DATE","Station","Data.Value")],tmp2.mean[,c("DATE","Station","Data.Value")])
+  calc.LakeO.stg=ddply(tmp.all,"DATE",summarise,Mean=round(mean(Data.Value,na.rm=T),2))
+  calc.LakeO.stg[,c("P1","P2")]=NA
+  LakeO.xtab=rbind(LakeO.xtab,calc.LakeO.stg[,names(LakeO.xtab)])
+  LakeO.xtab=LakeO.xtab[duplicated(LakeO.xtab$DATE,fromLast = T)==F,]
+}
+
+LakeO.xtab=merge(x=LakeO.xtab,y=LORS.gaph2Yrs,by.x="DATE",by.y="Date2",all.x=T)
+
+LakeO.xtab$Status=with(LakeO.xtab,ifelse(Mean>High,"within the High Lake",ifelse(Mean<High&Mean>Intermediate,"within the Operational High Sub-",ifelse(Mean<Intermediate&Mean>Low,"within the Operational Intermediate Sub-",ifelse(Mean<Low&Mean>BaseFlow,"within the Operational Low Sub-",ifelse(Mean<BaseFlow&Mean>BeneficialUse,"within the Operational Base Flow Sub-",ifelse(Mean<BeneficialUse&Mean>WSM,"within the Beneficial Use",ifelse(Mean<WSM,"within the Water Shortage Management",NA))))))))
+
+
+LakeO.xtab$StatusLow=with(LakeO.xtab,ifelse(Mean<Low,"Below","Above"))
+LakeO.xtab$DiffLow=with(LakeO.xtab,Mean-Low)
+
+LakeO.xtab$recess_7day=with(LakeO.xtab,c(rep(NA,7),diff(Mean,lag=7)))
+LakeO.xtab$recess_30day=with(LakeO.xtab,c(rep(NA,30),diff(Mean,lag=30)))
+
+LakeO.xtab$WY=WY(LakeO.xtab$DATE)
+
+LakeO.xtab$month=as.numeric(format(LakeO.xtab$DATE,"%m"))
+LakeO.xtab$day=as.numeric(format(LakeO.xtab$DATE,"%d"))
+LakeO.xtab$plot.dat=with(LakeO.xtab,date.fun(ifelse(month>4,paste(CurWY-1,month,day,sep="-"),paste(CurWY,month,day,sep="-"))))
+
+#last water year
+dates.last=c(date.fun(paste(CurWY-3,"05-01",sep="-")),date.fun(paste(CurWY-1,"04-30",sep="-")))
+lastWY.LORS=data.frame()
+for(i in 1:length(comp.dbkey$DBKEY)){
+  tmp=DBHYDRO_daily(dates.last[1],dates.last[2],comp.dbkey$DBKEY[i])
+  tmp$DBKEY=as.character(comp.dbkey$DBKEY[i])
+  lastWY.LORS=rbind(tmp,lastWY.LORS)
+  print(i)
+}
+lastWY.LORS=merge(lastWY.LORS,comp.dbkey,by="DBKEY")
+lastWY.LORS$DATE=date.fun(lastWY.LORS$Date)
+
+lastWY.LORS.xtab=cast(lastWY.LORS,DATE~Priority,value="Data.Value",mean)
+lastWY.LORS.xtab$Mean=with(lastWY.LORS.xtab,ifelse(is.na(P1)==T,P2,P1))
+lastWY.LORS.xtab$WY=WY(lastWY.LORS.xtab$DATE)
+
+lastWY.LORS.xtab$month=as.numeric(format(lastWY.LORS.xtab$DATE,"%m"))
+lastWY.LORS.xtab$day=as.numeric(format(lastWY.LORS.xtab$DATE,"%d"))
+lastWY.LORS.xtab$plot.dat=with(lastWY.LORS.xtab,date.fun(ifelse(month>4,paste(CurWY-1,month,day,sep="-"),paste(CurWY,month,day,sep="-"))))
+
+```
+
+
+*  As of `r if(is.na(subset(LakeO.xtab, DATE==YEST)$Mean)==T){format(YEST-ddays(1),"%m/%d/%Y")}else{format(YEST,"%m/%d/%Y")}` the mean stage elevation in Lake Okeechobee is `r if(is.na(subset(LakeO.xtab, DATE==YEST)$Mean)==T){subset(LakeO.xtab,DATE==YEST-ddays(1))$Status}else{subset(LakeO.xtab,DATE==YEST)$Status} ` Management Band at a stage elevation  of `r if(is.na(subset(LakeO.xtab, DATE==YEST)$Mean)==T){round(subset(LakeO.xtab,DATE==YEST-ddays(1))$Mean,2)}else{round(subset(LakeO.xtab,DATE==YEST)$Mean,2)}` feet (NGVD29).
+*  The 7-day recession/accession rate of Lake Okeechobee for `r if(is.na(subset(LakeO.xtab, DATE==YEST)$Mean)==T){format(YEST-ddays(1),"%m/%d/%Y")}else{format(YEST,"%m/%d/%Y")}` is `r if(is.na(subset(LakeO.xtab, DATE==YEST)$Mean)==T){round(subset(LakeO.xtab,DATE==YEST-ddays(1))$recess_7day,2)}else{round(subset(LakeO.xtab,DATE==YEST)$recess_7day,2)} ` feet per 7-day period (__NOTE: negative values indicate falling water levels (recession) and positive values indicate raising water level (ascension)__). _Recession/ascension rates calculation based on the change in water level over a 7-day period._
+*  The 30-day recession/accession rate of Lake Okeechobee for `r if(is.na(subset(LakeO.xtab, DATE==YEST)$Mean)==T){format(YEST-ddays(1),"%m/%d/%Y")}else{format(YEST,"%m/%d/%Y")}` is `r if(is.na(subset(LakeO.xtab, DATE==YEST)$recess_30day)==T){round(subset(LakeO.xtab,DATE==YEST-ddays(1))$recess_30day,2)}else{round(subset(LakeO.xtab,DATE==YEST)$recess_30day,2)} ` feet per 30-day period (__NOTE: negative values indicate falling water levels (recession) and positive values indicate raising water level (ascension)__). _Recession/ascension rates calculation based on the change in water level over a 30-day period._
+
+
+```{r LORS plot,echo=FALSE,fig.width=7,fig.height=5,fig.align='center'}
+HighLakeLab.x=as.POSIXct(paste(CurWY-1,9,1,sep="-"))
+WSMLab.x=as.POSIXct(paste(CurWY-1,9,1,sep="-"))
+BENLab.x=as.POSIXct(paste(CurWY-1,7,15,sep="-"))
+BASELab.x=as.POSIXct(paste(CurWY,4,1,sep="-"))
+HIGHLab.x=as.POSIXct(paste(CurWY,3,15,sep="-"))
+InterLab.x=as.POSIXct(paste(CurWY,3,1,sep="-"))
+LowLab.x=as.POSIXct(paste(CurWY,2,15,sep="-"))
+
+lwd.val=1
+xlim.vals=as.POSIXct(strptime(c(as.Date(paste(CurWY-1,05,01,sep="-")),as.Date(paste(CurWY,05,01,sep="-"))),"%Y-%m-%d"),tz="EST")#as.POSIXct(strptime(dates,"%Y-%m-%d"),tz="EST")
+xmaj=seq(xlim.vals[1],xlim.vals[2],by="2 months");xmin=seq(xlim.vals[1],xlim.vals[2],by="1 months")
+ylim.val=c(9,18);by.y=1
+ymaj=seq(ylim.val[1],ylim.val[2],by.y);ymin=seq(ylim.val[1],ylim.val[2],by.y/2)
+
+par(family="serif",mar=c(1,2,1,1),oma=c(1,3,1,1));
+  layout(matrix(1:2,2,1,byrow=T),heights=c(1,0.25))
+plot(High~Date2,LORS.gaph2Yrs,ylim=ylim.val,xlim=xlim.vals,type="n",lwd=2,ylab=NA,xlab=NA,yaxs="i",xaxs="i",xaxt="n",yaxt="n")
+abline(h=seq(9,18,1),lwd=1,col="grey",lty=3)
+abline(v=seq(xlim.vals[1],xlim.vals[2],by="1 months"),lwd=1,col="grey",lty=3)
+with(LORS.gaph2Yrs,lines(High~Date2,lwd=2,col="black"))
+with(LORS.gaph2Yrs,lines(Intermediate~Date2,lwd=2,col="black"))
+with(LORS.gaph2Yrs,lines(Low~Date2,lwd=2,col="black"))
+with(LORS.gaph2Yrs,lines(BaseFlow~Date2,lwd=2,col="black"))
+with(LORS.gaph2Yrs,lines(BeneficialUse~Date2,lwd=2,col="black"))
+with(LORS.gaph2Yrs,lines(WSM~Date2,lwd=2,col="grey"))
+with(LORS.gaph2Yrs,lines(Inter1ft~Date2,lwd=2,lty=5,col="black"))
+with(LORS.gaph2Yrs,lines(LowLow~Date2,lwd=2,lty=5,col="grey"))
+with(LORS.gaph2Yrs,lines(LowMid~Date2,lwd=2,lty=5,col="grey"))
+text(HighLakeLab.x,17.5,"High Lake Management Band",font=2)
+text(WSMLab.x,9.5,"Water Shortage Management Band",font=2)
+text(BENLab.x,12,"Beneficial Use",font=2)
+text(BASELab.x,13,"Base Flow",font=2)
+text(HIGHLab.x,17,"High",font=2)
+text(InterLab.x,16.25,"Intermediate ",font=2,cex=0.75)
+text(LowLab.x,14.5,"Low",font=2,cex=0.75)
+with(subset(LakeO.xtab,WY==CurWY-1),lines(plot.dat,Mean,lwd=4,col=adjustcolor("blue",0.5),lty=1))
+with(LakeO.xtab,lines(DATE,Mean,lwd=4,col="red",lty=1))
+if(is.na(subset(LakeO.xtab,DATE==date.fun(TODAY-ddays(1)))$Mean)==T){NA}else{
+with(subset(LakeO.xtab,DATE==date.fun(TODAY-ddays(1))),points(DATE,Mean,pch=21,bg=adjustcolor("red",0.5),col="red",lwd=0.1,cex=1.25))
+with(subset(LakeO.xtab,DATE==date.fun(TODAY-ddays(1))),segments(DATE,Mean,DATE,10.1,lty=2))
+with(subset(LakeO.xtab,DATE==date.fun(TODAY-ddays(1))),text(DATE,10,paste(format(round(Mean,2),nsmall=2),"Ft"),cex=0.8,xpd=NA))}
+
+axis_fun(1,xmaj,xmin,format(xmaj,"%b"),cex.axis=1)
+axis_fun(2,ymaj,ymin,ymaj,cex.axis=1)
+box(lwd=lwd.val)
+mtext(side=1,"Month",line=2.5,cex=2)
+mtext(side=2,"Stage Elevation (Feet, NGVD29)",line=2.5,cex=1.5)
+mtext(side=3,adj=0,paste("Date:",format(date.fun(Sys.Date()-ddays(1)),"%b %d, %Y")))
+mtext(side=3,adj=1,"Data are provisional and subject to change",col="red")
+
+plot(0:1,0:1,type = 'n', axes = F,xlab=NA, ylab=NA)
+legend(0.5,0.5,
+       legend=c(paste("WY",CurWY),paste("WY",CurWY-1)),
+       col=c("red",adjustcolor("blue",0.5)),lty=c(1,1),lwd=c(4,4),ncol=2,cex=1.25,bty="n",y.intersp=1,x.intersp=0.5,xpd=NA,xjust=0.5)
+```
+
+<font size=3><center>Lake Okeechobee daily average stage elevation for `r paste0("WY",CurWY)` (<font color="red">red</font> line) relative to the Lake Okeechobee Regulation Schedule (LORS) .</center></font>
+<font size=4 color="red"><center>Data are provisional and subject to change.</center></font>
+
+```{r, echo=F,warning=F,include=F}
+
+plot.path="//Fldep1/OWPER/EVG/Programmatic/WaterQuality/R_Reports/Reports/"
+cols=c("blue","forestgreen")#viridisLite::cividis(3)
+tiff(filename=paste0(plot.path,"okeechobee_Stage.tiff"),width=7,height=5,units="in",res=200,type="windows",compression=c("lzw"),bg="white")
+par(family="serif",mar=c(1,2,1,1),oma=c(1,3,1,1));
+layout(matrix(1:2,2,1,byrow=T),heights=c(1,0.25))
+plot(High~Date2,LORS.gaph2Yrs,ylim=ylim.val,xlim=xlim.vals,type="n",lwd=2,ylab=NA,xlab=NA,yaxs="i",xaxs="i",xaxt="n",yaxt="n")
+abline(h=seq(9,18,1),lwd=1,col="grey",lty=3)
+abline(v=seq(xlim.vals[1],xlim.vals[2],by="1 months"),lwd=1,col="grey",lty=3)
+with(LORS.gaph2Yrs,lines(High~Date2,lwd=2,col="black"))
+with(LORS.gaph2Yrs,lines(Intermediate~Date2,lwd=2,col="black"))
+with(LORS.gaph2Yrs,lines(Low~Date2,lwd=2,col="black"))
+with(LORS.gaph2Yrs,lines(BaseFlow~Date2,lwd=2,col="black"))
+with(LORS.gaph2Yrs,lines(BeneficialUse~Date2,lwd=2,col="black"))
+with(LORS.gaph2Yrs,lines(WSM~Date2,lwd=2,col="grey"))
+with(LORS.gaph2Yrs,lines(Inter1ft~Date2,lwd=2,lty=5,col="black"))
+with(LORS.gaph2Yrs,lines(LowLow~Date2,lwd=2,lty=5,col="grey"))
+with(LORS.gaph2Yrs,lines(LowMid~Date2,lwd=2,lty=5,col="grey"))
+text(HighLakeLab.x,17.5,"High Lake Management Band",font=2)
+text(WSMLab.x,9.5,"Water Shortage Management Band",font=2)
+text(BENLab.x,12,"Beneficial Use",font=2)
+text(BASELab.x,13,"Base Flow",font=2)
+text(HIGHLab.x,17,"High",font=2)
+text(InterLab.x,16.25,"Intermediate ",font=2,cex=0.75)
+text(LowLab.x,14.5,"Low",font=2,cex=0.75)
+with(subset(LakeO.xtab,WY==CurWY-1),lines(plot.dat,Mean,lwd=4,col=adjustcolor(cols[1],0.5),lty=1))
+with(subset(LakeO.xtab,WY==CurWY-2),lines(plot.dat,Mean,lwd=4,col=adjustcolor(cols[2],0.5),lty=1))
+with(LakeO.xtab,lines(DATE,Mean,lwd=4,col="red",lty=1))
+if(is.na(subset(LakeO.xtab,DATE==date.fun(TODAY-ddays(1)))$Mean)==T){NA}else{
+with(subset(LakeO.xtab,DATE==date.fun(TODAY-ddays(1))),points(DATE,Mean,pch=21,bg=adjustcolor("red",0.5),col="red",lwd=0.1,cex=1.25))
+with(subset(LakeO.xtab,DATE==date.fun(TODAY-ddays(1))),segments(DATE,Mean,DATE,10.1,lty=2))
+with(subset(LakeO.xtab,DATE==date.fun(TODAY-ddays(1))),text(DATE,10,paste(format(round(Mean,2),nsmall=2),"Ft"),cex=0.8,xpd=NA))}
+
+axis_fun(1,xmaj,xmin,format(xmaj,"%b"),cex.axis=1)
+axis_fun(2,ymaj,ymin,ymaj,cex.axis=1)
+box(lwd=lwd.val)
+mtext(side=1,"Month",line=2.5,cex=2)
+mtext(side=2,"Stage Elevation (Feet, NGVD29)",line=2.5,cex=1.5)
+#text(xlim.vals[1],ylim.val[2]+0.25,paste("Date:",format(date.fun(Sys.Date()-ddays(1)),"%b %d, %Y")),xpd=NA,adj=0)
+mtext(side=3,adj=0,paste("Date:",format(date.fun(Sys.Date()-ddays(1)),"%b %d, %Y")))
+mtext(side=3,adj=1,"Data are provisional and subject to change",col="red")
+
+plot(0:1,0:1,type = 'n', axes = F,xlab=NA, ylab=NA)
+legend(0.5,0.5,
+       legend=c(paste0("WY",CurWY),paste0("WY",CurWY-1),paste0("WY",CurWY-2)),
+       col=c("red",adjustcolor(c(cols),0.5)),lty=1,lwd=4,ncol=3,cex=1.25,bty="n",y.intersp=1,x.intersp=0.5,xpd=NA,xjust=0.5)
+
+dev.off()
+
+```
+
+```{r LORS 30d Plot,echo=FALSE,fig.width=7,fig.height=5.5,fig.align='center'}
+input=c(End.Date-ddays(30),End.Date)
+
+cols=colorRampPalette(c("dodgerblue1","khaki"))
+cols.val=cols(5)
+  lwd.val=1
+  ylim.val=c(9,18);by.y=1
+  ymaj=seq(ylim.val[1],ylim.val[2],by.y);ymin=seq(ylim.val[1],ylim.val[2],by.y/2)
+  xlim.val=date.fun(c(input));
+  xmaj=seq(xlim.val[1],xlim.val[2],by="14 days");xmin=seq(xlim.val[1],xlim.val[2],by="1 days");
+
+  par(family="serif",cex.axis=1,mar=c(2,2,1,1),oma=c(3,3,1,1));
+  layout(matrix(1:2,1,2,byrow=T),widths=c(1,0.5))
+  plot(High~Date2,LORS.gaph2Yrs,ylim=ylim.val,xlim=xlim.val,type="n",lwd=2,ylab=NA,xlab=NA,yaxs="i",xaxs="i",xaxt="n",yaxt="n");
+  abline(h=ymaj,v=xmin,lwd=1,col="grey",lty=3);
+  with(LORS.gaph2Yrs,polygon(c(Date2,rev(Date2)),c(High,rev(Intermediate)),col=adjustcolor(cols.val[1],0.50)))
+  with(LORS.gaph2Yrs,polygon(c(Date2,rev(Date2)),c(Intermediate,rev(Low)),col=adjustcolor(cols.val[2],0.50)))
+  with(LORS.gaph2Yrs,polygon(c(Date2,rev(Date2)),c(Low,rev(BaseFlow)),col=adjustcolor(cols.val[3],0.50)))
+  with(LORS.gaph2Yrs,polygon(c(Date2,rev(Date2)),c(BaseFlow,rev(BeneficialUse)),col=adjustcolor(cols.val[4],0.50)))
+  with(LORS.gaph2Yrs,polygon(c(Date2,rev(Date2)),c(BeneficialUse,rev(WSM)),col=adjustcolor(cols.val[5],0.50)))
+  with(LORS.gaph2Yrs,polygon(c(Date2,rev(Date2)),c(WSM,rev(rep(0,nrow(LORS.gaph2Yrs)))),col=adjustcolor("indianred1",0.50)))
+  with(LORS.gaph2Yrs,polygon(c(Date2,rev(Date2)),c(High,rev(rep(18,nrow(LORS.gaph2Yrs)))),col=adjustcolor("gray59",0.50)))
+
+  with(LakeO.xtab,lines(DATE,Mean,lwd=4,col="red",lty=1));
+  abline(v=date.fun(paste(CurWY-1,"-05-01",sep="")),lwd=2,col="black")
+  axis_fun(1,xmaj,xmin,format(xmaj,"%m/%d"),cex.axis=1);
+  axis_fun(2,ymaj,ymin,ymaj,cex.axis=1);
+  box(lwd=lwd.val);
+  mtext(side=1,"Month/Day",line=2.5,cex=2);
+  mtext(side=2,"Stage Elevation (Feet, NGVD29)",line=2.5,cex=1.5);
+
+  plot(0:1,0:1,type = 'n', axes = F,xlab=NA, ylab=NA)
+
+  
+  labs=c("High Lake","High Sub-Band","Intermediate Sub-Band","Low Sub-Band","Operational Base-Flow Sub-Band","Beneficial Use","Water Shortage")
+  pal=rev(adjustcolor(c("gray59",cols.val[1:3],cols.val[4:5],"indianred1"),0.50))
+  n=7
+  
+  rect.y=seq(0.1,0.8,length.out = n+1)
+  for(i in 1:n){
+    polygon(c(0,0.25,0.25,0),y=c(rect.y[i],rect.y[i],rect.y[i+1],rect.y[i+1]),col=pal[i])
+  }
+  text(x=0,y=0.85,"Management Bands",adj=0,font=2)
+  text(x= 0.3,y=rect.y[1:n]+mean((diff(rect.y)/2)), labels = rev(labs),cex=1,xpd=NA,adj=0)
+
+```
+
+
+<font size=3><center>Lake Okeechobee daily average stage elevation for the last 30-days (<font color="red">red</font> line) relative to the Lake Okeechobee Regulation Schedule (LORS) .</center></font>
+<font size=4 color="red"><center>Data are provisional and subject to change.</center></font>
+
+```{r recess plot,echo=FALSE,fig.width=7,fig.height=5,fig.align='center'}
+lwd.val=1
+ylim.val=c(-1,1);by.y=0.5
+ymaj=c(0,seq(ylim.val[1],ylim.val[2],by.y));ymin=seq(ylim.val[1],ylim.val[2],by.y/2)
+xlim.vals=as.POSIXct(strptime(c(as.Date(paste(CurWY-1,05,01,sep="-")),as.Date(paste(CurWY,05,01,sep="-"))),"%Y-%m-%d"),tz="EST")
+#xlim.vals=as.POSIXct(strptime(dates,"%Y-%m-%d"),tz="EST")
+xmaj=seq(xlim.vals[1],xlim.vals[2],by="2 months");xmin=seq(xlim.vals[1],xlim.vals[2],by="1 months")
+
+LakeO.xtab$recess_7day=with(LakeO.xtab,ifelse(is.na(recess_7day)==T,0,recess_7day))
+
+par(family="serif",cex.axis=1,mar=c(2,2,1,1),oma=c(2,3,1,1),mgp=c(3,1,0));
+plot(recess_7day~DATE,LakeO.xtab,ylim=ylim.val,xlim=xlim.vals,type="n",lwd=2,ylab=NA,xlab=NA,yaxs="i",xaxs="i",xaxt="n",yaxt="n")
+abline(v=xmin,h=ymin,lwd=1,col="grey",lty=3)
+abline(h=0);
+#with(LakeO.xtab,lines(DATE,recess_7day,lwd=1.5,col="black",lty=1))
+with(LakeO.xtab,shaded.range(DATE,rep(0,length(DATE)),recess_7day,"dodgerblue1",lty=1))
+points(YEST,subset(LakeO.xtab,DATE==YEST)$recess_7day,pch=21,bg="indianred1",cex=1.25)
+text.x=if(YEST>date.fun(paste0(CurWY,"-04-01"))){YEST-ddays(15)}else{YEST+ddays(15)}
+if(subset(LakeO.xtab,DATE==YEST)$recess_7day!=0){text(text.x,subset(LakeO.xtab,DATE==YEST)$recess_7day,round(subset(LakeO.xtab,DATE==YEST)$recess_7day,2),cex=0.8)}
+axis_fun(1,xmaj,xmin,format(xmaj,"%b"),cex.axis=1)
+axis_fun(2,ymaj,ymin,format(ymaj),cex.axis=1)
+box(lwd=lwd.val)
+mtext(side=1,"Month",line=2.5,cex=2)
+mtext(side=2,"Recession/Ascension Rate (Feet 7-days\u207B\u00B9)",line=2.5,cex=1.5)
+```
+
+<font size=3><center>Lake Okeechobee 7-day water level recession/ascension rates during `r paste0("WY",CurWY)`. The red-point identifes the recession/ascension rate for the period of `r if(is.na(subset(LakeO.xtab, DATE==YEST)$Mean)==T){format(YEST-ddays(8),"%m/%d/%Y")}else{format(YEST-ddays(7),"%m/%d/%Y")}` - `r if(is.na(subset(LakeO.xtab, DATE==YEST)$Mean)==T){format(YEST-ddays(1),"%m/%d/%Y")}else{format(YEST,"%m/%d/%Y")}`. Negative values indicate falling water levels (recession) and positive values indicate raising water level (ascension) during this 7-day period .</center></font>
+<font size=4 color="red"><center>Data are provisional and subject to change.</center></font>
+
+<br>
+
+```{r Caloosa Data, include=FALSE}
+End.Date=as.Date(Sys.time()); ## Update this value
+Start.Date=as.Date(End.Date-duration(30,"days"));
+
+Cal.Sal=data.frame(SITE=c("CCORAL","CCORAL","FORTMYERSM","FORTMYERSM","MARKH","MARKH","SANIB1","SANIB1","SANIB2","SANIB2"),PARAM=c("WT","SPC","WT","SPC","WT","SPC","WT","SPC","WT","SPC"),DBKEY=c("UO834","AJ007","88287","88292","88200","88204","WN367","WN369","WN375","WN377"))
+
+Cal.Sal=subset(Cal.Sal,SITE%in%c("CCORAL","FORTMYERSM","MARKH","SANIB1"))
+
+caloosa.spc.dat=data.frame()
+for(i in 1:length(Cal.Sal$DBKEY)){
+tmp=DBHYDRO_breakpoint(Start.Date,End.Date,Cal.Sal$DBKEY[i])
+caloosa.spc.dat=rbind(tmp,caloosa.spc.dat)
+print(i)
+}
+
+Cal.Stations=data.frame(STATION.Param=c("MARKH+T1","MARKH+C1","FMYERW1","FMYERC1","CCORALC1","CCORALT1","SANIBT1","SANIBSA1"),SITE=c("MARKH","MARKH","FMYER","FMYER","CCORAL","CCORAL","SANIB","SANIB"),PARAM=c("Temp","Cond","Temp","Cond","Cond","Temp","Temp","Sal") )
+caloosa.spc.dat=merge(x=caloosa.spc.dat,y=Cal.Stations,by.y="STATION.Param",by.x="Station",all.x=T)
+caloosa.spc.dat$Data.Value=with(caloosa.spc.dat,ifelse(Data.Value==-999,NA,Data.Value))
+
+caloosa.spc.dat.xtab=cast(caloosa.spc.dat,SITE+DATETIME~PARAM,value="Data.Value",mean)
+caloosa.spc.dat.xtab=caloosa.spc.dat.xtab[order(caloosa.spc.dat.xtab$SITE,caloosa.spc.dat.xtab$DATETIME),]
+
+## Salinity conversion basn UNESCO "Algorithms for computation of fundamental propoerties of seawater"
+caloosa.spc.dat.xtab$Calc.Sal=with(caloosa.spc.dat.xtab,SalinityCalc(Cond,Temp))
+caloosa.spc.dat.xtab$Calc.Sal=with(caloosa.spc.dat.xtab,ifelse(Calc.Sal<0|Calc.Sal==0,NA,Calc.Sal))
+caloosa.spc.dat.xtab=caloosa.spc.dat.xtab[,c("SITE","DATETIME","Cond","Temp","Calc.Sal")]
+caloosa.spc.dat.xtab$Sal.Final=caloosa.spc.dat.xtab$Calc.Sal;
+caloosa.spc.dat.xtab$DATE=as.POSIXct(strptime(caloosa.spc.dat.xtab$DATETIME,"%F"),tz="EST")
+caloosa.spc.dat.xtab$hr=format(caloosa.spc.dat.xtab$DATETIME,"%H")
+
+caloosa.daily.dat=ddply(caloosa.spc.dat.xtab,c("SITE","DATE"),summarise,Mean.Cond=mean(Cond,na.rm=T),Mean.Sal=mean(Sal.Final, na.rm=T))
+caloosa.daily.dat$MovingAvg.7d=with(caloosa.daily.dat,ave(Mean.Sal,SITE,FUN=function(x) roll_meanr(x,n=7,na.rm=T)))
+```
+
+```{r Caloosa Data_Flow, include=FALSE}
+cal.flow=data.frame(DBKEY=c("DJ235","DJ237"),SITE=c("S77","S79"))
+cal.flow.dat=data.frame()
+for(i in 1:2){
+  tmp=DBHYDRO_daily(Start.Date2,End.Date,cal.flow$DBKEY[i])
+  tmp$DBKEY=as.character(cal.flow$DBKEY[i])
+  cal.flow.dat=rbind(tmp,cal.flow.dat)
+}
+cal.flow.dat$Date=date.fun(cal.flow.dat$Date)
+cal.flow.dat.xtab=cast(merge(cal.flow.dat,cal.flow,"DBKEY"),Date~SITE,value="Data.Value",mean)
+USGS.dat.xtab=cal.flow.dat.xtab;#not USGS data but the easiest most versitle fix to avoid revamping all code.
+
+USGS.dat.xtab$C43BasinFlow=with(USGS.dat.xtab,S79-S77)
+
+caloosa.daily.dat=subset(caloosa.daily.dat,DATE<TODAY)
+USGS.dat.xtab=subset(USGS.dat.xtab,Date<TODAY)
+USGS.dat.xtab$TFLOW=rowSums(USGS.dat.xtab[,c("S79","S77")],na.rm=T)
+
+```
+
+
+### ***Precipitation***
+
+```{r, out.width="60%",echo=FALSE,fig.align="center"}
+knitr::include_graphics("https://apps.sfwmd.gov/sfwmd/common/images/weather/qpf2.gif")
+```
+<font size=3><center>District Wide Precipitation Forecast for `r format(TODAY+ddays(1),"%m/%d/%Y")` (Data Source: [SFWMD](https://www.sfwmd.gov/weather-radar/sfwmd-forecast)).</center></font>
+
+
+```{r, out.width="60%",echo=FALSE,fig.align="center"}
+knitr::include_graphics(paste0("https://apps.sfwmd.gov/sfwmd/common/images/weather/precip/precip",format(TODAY-ddays(1),"%Y%m%d"),".gif"))
+```
+<font size=3><center>District Wide Precipitation from `r format(TODAY-ddays(1),"%m/%d/%Y")` to `r format(TODAY,"%m/%d/%Y")`. (Data Source: [SFWMD](https://www.sfwmd.gov/weather-radar/rainfall-historical/daily)).</center></font>
+
+```{r, out.width="60%",echo=F,fig.align="center"}
+knitr::include_graphics("https://www.cpc.ncep.noaa.gov/products/predictions/30day/off15_prcp.gif")
+```
+<font size=3><center>NOAA offical 30-day precipitation forecasts. (Data Source: [NOAA](https://www.cpc.ncep.noaa.gov/products/forecasts/month_to_season_outlooks.php)).</center></font>
+
+<br>
+
+```{r, out.width="75%",echo=F,fig.align="center"}
+knitr::include_graphics("https://www.cpc.ncep.noaa.gov/products/predictions/long_range/lead01/off01_prcp.gif")
+
+monthseq=seq(Sys.Date(),as.Date(Sys.Date()+lubridate::duration(3,"months")),"month")[1:3]
+yr.val.txt=if(length(unique(format(monthseq,"%Y")))==1){unique(format(monthseq,"%Y"))}else{paste(c(unique(format(monthseq,"%Y"))[1],unique(format(monthseq,"%y"))[2]),collapse="/")}
+
+```
+<font size=3><center>NOAA offical 3-month precipitation forecasts for `r paste(paste(format(monthseq,"%b"),collapse="-"),yr.val.txt)`. (Data Source: [NOAA](https://www.cpc.ncep.noaa.gov/products/forecasts/month_to_season_outlooks.php)).</center></font>
+
+
+
+#### Text Reports and Forecasts
+
+Link to [SFWMD Text Forecast](https://www.sfwmd.gov/weather-radar/sfwmd-text-forecast){target="_blank"}
+
+Link to [USACE Lake Okeechobee and Vicinity Report](http://w3.saj.usace.army.mil/h2o/reports/r-oke.txt){target="_blank"}
+
+<br>
+
+### ***Flow and Salinity Data for the C-43/Caloosahatchee River and Estuary***
+
+```{r Cal Instant Sal plot,echo=FALSE,fig.width=11,fig.height=6,fig.align='center'}
+CALSITES=c("SANIB","MARKH","CCORAL","FMYER","S79")
+EDate.plot=as.Date(Sys.time())+duration(1,"days")
+SDate.plot=as.Date(EDate.plot-duration(14,"days"))
+lwd.val=1
+xlim.val=as.POSIXct(strptime(c(SDate.plot,EDate.plot),"%Y-%m-%d"),tz="EST")
+xmaj=seq(xlim.val[1],xlim.val[2],by="7 days");xmin=seq(xlim.val[1],xlim.val[2],by="1 days")
+
+ylim.val=c(0,40);
+ylim.val2=c(0,20);
+by.y=10;ymaj=seq(ylim.val[1],ylim.val[2],by.y);ymin=seq(ylim.val[1],ylim.val[2],by.y/2)
+colrmp=blue2green(10)
+txt.cex=2
+
+par(family="serif",cex.axis=1.2,mar=c(1,2.5,1,1),oma=c(12,3,4,1),mgp=c(3,1,0));
+layout(matrix(c(1,2,3,4),1,4,byrow=F));
+station.label=c("Sanibel","Shell Point","Cape Coral","Ft. Myers")
+for(i in 1:2){
+plot(Mean.Sal~DATE,subset(caloosa.daily.dat,SITE==CALSITES[i]),type="n",ylim=ylim.val,xlim=xlim.val,xaxt="n",xaxs="i",xlab=NA,yaxt="n",yaxs="i",ylab=NA,lwd=1.75,col=colrmp[1])
+xx=c(xlim.val[1],xlim.val[1],xlim.val[2],xlim.val[2])
+yy=c(0,5,5,0);polygon(x=xx,y=yy,col="peachpuff1")
+yy2=c(35,40,40,35);polygon(x=xx,y=yy2,col="peachpuff1")
+yy3=c(30,35,35,30);polygon(x=xx,y=yy3,col="khaki")
+yy4=c(5,10,10,5);polygon(x=xx,y=yy4,col="khaki")
+yy5=c(10,30,30,10);polygon(x=xx,y=yy5,col="darkseagreen2")
+abline(h=seq(0,40,5))
+with(subset(caloosa.daily.dat,SITE==CALSITES[i]),pt_line(DATE,Mean.Sal,1,colrmp[i],2,21,colrmp[i],cex=2,pt.col=colrmp[i]))
+axis_fun(1,xmaj,xmin,format(xmaj,"%m/%d"),cex.axis=1)
+axis_fun(2,ymaj,ymin,ymaj,cex.axis=1)
+mtext(side=3,station.label[i],line=1,cex=txt.cex*0.5)
+box(lwd=lwd.val*1.5)}
+mtext(side=2,"Salinity (PSU)",line=0.75,cex=1.75,outer=T)
+mtext(expression(paste(underline("Oyster Condition"))),side=3,cex=txt.cex*0.75,line=2.25,outer=F)
+mtext(side=1,"Oyster Salinity Condition",line=6,cex=1.25)
+
+plot(Mean.Sal~DATE,subset(caloosa.daily.dat,SITE==CALSITES[3]),type="n",ylim=ylim.val,xlim=xlim.val,xaxt="n",xaxs="i",xlab=NA,yaxt="n",yaxs="i",ylab=NA,lwd=1.75,col=colrmp[3])
+xx=c(xlim.val[1],xlim.val[1],xlim.val[2],xlim.val[2])
+yy=c(0,5,5,0);polygon(x=xx,y=yy,col="peachpuff1")
+yy2=c(35,40,40,35);polygon(x=xx,y=yy2,col="peachpuff1")
+yy3=c(30,35,35,30);polygon(x=xx,y=yy3,col="khaki")
+yy4=c(5,10,10,5);polygon(x=xx,y=yy4,col="khaki")
+yy5=c(10,30,30,10);polygon(x=xx,y=yy5,col="darkseagreen2")
+abline(h=seq(0,40,5))
+with(subset(caloosa.daily.dat,SITE==CALSITES[3]),pt_line(DATE,Mean.Sal,1,colrmp[3],2,21,colrmp[3],cex=2,pt.col=colrmp[3]))
+axis_fun(1,xmaj,xmin,format(xmaj,"%m/%d"),cex.axis=1)
+axis_fun(2,ymaj,ymin,ymaj,cex.axis=1)
+mtext(side=3,station.label[3],line=1,cex=txt.cex*0.5)
+box(lwd=lwd.val*1.5)
+
+plot(Mean.Sal~DATE,subset(caloosa.daily.dat,SITE==CALSITES[4]),type="n",ylim=ylim.val,xlim=xlim.val,xaxt="n",xaxs="i",xlab=NA,yaxt="n",yaxs="i",ylab=NA,lwd=2,col=colrmp[7])
+xx=c(xlim.val[1],xlim.val[1],xlim.val[2],xlim.val[2])
+yy=c(0,10,10,0);polygon(x=xx,y=yy,col="darkseagreen2")
+yy=c(10,15,15,10);polygon(x=xx,y=yy,col="khaki")
+yy=c(15,40,40,15);polygon(x=xx,y=yy,col="peachpuff1")
+abline(h=seq(0,40,5))
+with(subset(caloosa.daily.dat,SITE==CALSITES[4]),pt_line(DATE,Mean.Sal,1,colrmp[7],2,21,colrmp[7],cex=2,pt.col=colrmp[7]))
+axis_fun(1,xmaj,xmin,format(xmaj,"%m/%d"),cex.axis=1)
+axis_fun(2,ymaj,ymin,ymaj,cex.axis=1)
+mtext(side=3,station.label[4],line=1,cex=txt.cex*0.5)
+box(lwd=lwd.val*1.75)
+mtext("Month/Day",side=1,line=3,cex=2,outer=T)
+mtext(expression(paste(underline("Tape grass Condition"))),side=3,cex=txt.cex*0.75,line=2.25,outer=F)
+xleg=strptime(SDate.plot-26,"%Y-%m-%d")
+xleg2=strptime(SDate.plot+7,"%Y-%m-%d")
+mtext(side=1,"Tape Grass Salinity Condition",line=6,cex=1.25)
+legend(xleg,-9,legend=c("Poor(<5 or >35)","Fair (5-10 or 30-35)","Good(10-30)"),pch=c(22,22,22),pt.bg=c("peachpuff1","khaki","darkseagreen2"),       pt.cex=3,ncol=1,cex=1.75,bty="n",y.intersp=1,x.intersp=0.75,xpd=NA,xjust=0.5)
+
+legend(xleg2,-9,legend=c("Poor(>15)","Fair(10-15)","Good(<10)"),pch=c(22,22,22),pt.bg=c("peachpuff1","khaki","darkseagreen2"),       pt.cex=3,ncol=1,cex=1.75,bty="n",y.intersp=1,x.intersp=0.75,xpd=NA,xjust=0.5)
+
+
+```
+
+<font size=4><center>Daily average salinity data for the last 14-days from sampling locations within the tidal Caloosahatchee River Estuary relative to oyster health (Sanibel, Shell Point and Cape Coral) and tape grass (<i>Vallisneria americana</i>) health (Ft. Myers only) conditions.</center></font>
+<font size=5 color="red"><center>Data are provisional and subject to change.</center></font>
+
+```{r Cal 7d plots, echo=FALSE,fig.width=7,fig.height=5,fig.align='center'}
+par(family="serif",cex.axis=1.2,mar=c(2,2,1,1),oma=c(6,2,1,1),mgp=c(3,1,0));
+xmaj=seq(xlim.val[1],xlim.val[2],by="4 days");xmin=seq(xlim.val[1],xlim.val[2],by="1 days")
+
+CALSITES=c("SANIB","MARKH","CCORAL","FMYER","S79")
+cols=c("forestgreen","red","blue")
+lwd.val=1
+plot(MovingAvg.7d~DATE,caloosa.daily.dat,type="n",ylim=ylim.val,xlim=xlim.val,xaxs="i",yaxs="i",yaxt="n",xaxt="n",ylab=NA,xlab=NA)
+xx=c(xlim.val[1],xlim.val[1],xlim.val[2],xlim.val[2])
+yy=c(0,5,5,0);polygon(x=xx,y=yy,col="peachpuff1")
+yy2=c(35,40,40,35);polygon(x=xx,y=yy2,col="peachpuff1")
+yy3=c(30,35,35,30);polygon(x=xx,y=yy3,col="khaki")
+yy4=c(5,10,10,5);polygon(x=xx,y=yy4,col="khaki")
+yy5=c(10,30,30,10);polygon(x=xx,y=yy5,col="darkseagreen2")
+abline(h=seq(0,40,5))
+for(i in 1:3){with(subset(caloosa.daily.dat,SITE==CALSITES[i]),lines(DATE,MovingAvg.7d,lwd=3,col=cols[i]))}
+axis_fun(1,xmaj,xmin,format(xmaj,"%m/%d/%Y"),cex.axis=1)
+axis_fun(2,ymaj,ymin,ymaj,cex.axis=1)
+box(lwd=lwd.val*1.5)
+xleg=strptime(min(xlim.val)+ddays(7),"%Y-%m-%d")
+mtext("Date (MM/DD/YYYY)",side=1,line=2.5,cex=1.5)
+mtext("Salinity (PSU)",side=2,line=2.5,cex=1.5)
+
+legend(xleg,-10,
+       legend=c("Sanibel","Shell Point","Cape Coral"),
+        col=cols,lty=c(1,1,1),lwd=c(2,2,2),pt.cex=2.5,ncol=3,cex=1.5,bty="n",y.intersp=1,x.intersp=0.5,xpd=NA,xjust=0.5)
+legend(xleg,-15,
+       legend=c("Salinity Condition:","Poor(<5 or >35)","Fair (5-10 or 30-35)","Good(10-30)"),
+       pch=c(NA,22,22,22),pt.bg=c(NA,"peachpuff1","khaki","darkseagreen2"),
+     pt.cex=2,ncol=4,cex=1,bty="n",y.intersp=1,x.intersp=0.75,xpd=NA,xjust=0.5)
+```
+<font size=4><center>Moving 7-day average salinities observed at the Cape Coral, Shell Point and Sanibel salinity monitoring stations relative to Oyster salinity health conditions.</center></font>
+<font size=5 color="red"><center>Data are provisional and subject to change.</center></font>
+
+
+```{r Cal_algae,echo=FALSE,fig.width=7,fig.height=5,fig.align='center'}
+# 32315 relative fChl
+# 32321 relative Phycocyanin
+#cal.algae=readNWISdv("02292900",c("32315","32321"),"2017-11-01",format(End.Date,"%Y-%m-%d"))
+cal.algae=readNWISdv("02292900",c("32315","32321"),format(Start.Date,"%Y-%m-%d"),format(End.Date,"%Y-%m-%d"))
+cal.algae=renameNWISColumns(cal.algae)
+cal.algae$Date=date.fun(cal.algae$Date)
+
+cal.algae=merge(cal.algae,data.frame(Date=date.fun(seq(Start.Date,End.Date,"1 days")),fill=1),"Date",all.y=T)
+
+cal.algae$phy_chl=with(cal.algae,X_FLOATING_32321/(X_FLOATING_32321+X_FLOATING_32315))
+#plot(phy_chl~Date,cal.algae)
+
+EDate.plot=as.Date(Sys.time())+duration(1,"days")
+SDate.plot=as.Date(EDate.plot-duration(14,"days"))
+lwd.val=1
+xlim.val=as.POSIXct(strptime(c(SDate.plot,EDate.plot),"%Y-%m-%d"),tz="EST")
+xmaj=seq(xlim.val[1],xlim.val[2],by="7 days");xmin=seq(xlim.val[1],xlim.val[2],by="1 days")
+
+ylim.val=c(0,12);
+by.y=max(ylim.val)/3;
+ymaj=seq(ylim.val[1],ylim.val[2],by.y);
+ymin=seq(ylim.val[1],ylim.val[2],by.y/2)
+
+ylim.val2=c(0,6);
+by.y2=max(ylim.val2)/3;
+ymaj2=round(seq(ylim.val2[1],ylim.val2[2],by.y2),1);
+ymin2=round(seq(ylim.val2[1],ylim.val2[2],by.y2/2),1)
+
+par(family="serif",mar=c(1,3,0.5,4),oma=c(3,3,2,2));
+layout(matrix(1:2,2,1),heights=c(1,0.5))
+
+plot(X_FLOATING_32315~Date,cal.algae,ylim=ylim.val,xlim=xlim.val,type="n",axes=F,ann=F)
+abline(h=ymaj,v=xmaj,lty=3,col="grey")
+with(cal.algae,pt_line(Date,X_FLOATING_32315,1,"forestgreen",1.5,21,"forestgreen",cex=1.25,pt.lwd=0.1))
+axis_fun(2,ymaj,ymin,format(ymaj))
+abline(h=3.8,lty=2,col="red");# based ib fChl and grab Chl-a model (fChlAnalysis_summary.rmd). 
+
+par(new=T);plot(X_FLOATING_32321~Date,cal.algae,ylim=ylim.val2,xlim=xlim.val,type="n",axes=F,ann=F)
+with(cal.algae,pt_line(Date,X_FLOATING_32321,1,"dodgerblue1",1.5,21,"dodgerblue1",cex=1.25,pt.lwd=0.1))
+axis_fun(4,ymaj2,ymin2,format(ymaj2))
+axis_fun(1,xmaj,xmin,NA);box(lwd=1)
+mtext(side=2,line=2.5,"Chlorophyll relative fluorsenece\n(RFU) ")
+mtext(side=4,line=3,"Phycocyanin relative fluorsenece\n(RFU) ")
+legend("topleft",legend=c("Chlorophyll","Phycocyanin","~20 \u03BCg L\u207B\u00B9 Chl-a"),
+       lty=c(1,1,2),lwd=3,col=c("forestgreen","dodgerblue1","red"),
+       ncol=1,cex=1,bty="n",y.intersp=1,x.intersp=0.75,xpd=NA,xjust=0.5)
+mtext(side=3,adj=0,"S-79 - Floating Sensor\n(USGS Site: 02292900)")
+mtext(side=3,adj=1,"Data are provisional",col="red")
+
+ylim.val3=c(0,1);
+by.y3=0.5;
+ymaj3=seq(ylim.val3[1],ylim.val3[2],by.y3);
+ymin3=seq(ylim.val3[1],ylim.val3[2],by.y3/2)
+
+plot(phy_chl~Date,cal.algae,ylim=ylim.val3,xlim=xlim.val,type="n",axes=F,ann=F)
+abline(h=ymaj3,v=xmaj,lty=3,col="grey")
+with(cal.algae,pt_line(Date,phy_chl,1,"indianred1",1.5,21,"indianred1",cex=1.25,pt.lwd=0.1))
+axis_fun(2,ymaj3,ymin3,format(ymaj3))
+axis_fun(1,xmaj,xmin,format(xmaj,"%m/%d/%Y"));box(lwd=1)
+mtext(side=2,line=2.5,expression(paste(frac("Phyco","Phyco + Chl"))))
+mtext("Date (MM/DD/YYYY)",side=1,line=2.25,cex=1)
+
+
+```
+<font size=4><center>Top: Daily relative floursence Chlorophyll and Phycocyanin observed at the floating sensor bouy at S-79 monitoring by USGS. Bottom: The relative ratio of Phycocyanin (Phyco) relative to Phyco and Chlorophyll (Chl). </center></font>
+<font size=5 color="red"><center>Data are provisional and subject to change.</center></font>
+
+
+
+```{r Cal Flow plots, echo=FALSE,fig.width=7,fig.height=5,fig.align='center'}
+xlim.val=as.POSIXct(strptime(c(as.Date(Sys.time()-duration(30,"days")),as.Date(Sys.time()+duration(3,"days"))),"%Y-%m-%d"),tz="EST")
+xmaj=seq(xlim.val[1],xlim.val[2],by="7 days")
+xmin=seq(xlim.val[1],xlim.val[2],by="1 days")
+
+ylim.val.max=ifelse(max(USGS.dat.xtab$TFLOW,na.rm=T)<3000,3000,ifelse(max(USGS.dat.xtab$TFLOW,na.rm=T)<9000,9000,15000))
+ylim.val=c(-20,ylim.val.max);by.y=5
+ymaj=seq(0,ylim.val[2],ylim.val[2]/by.y)
+ymin=seq(0,ylim.val[2],ylim.val[2]/(by.y*2))
+cols=c("palegreen3","dodgerblue","grey")
+
+layout(matrix(1:2,2,1,byrow=F),widths=c(2,1),heights=c(2,0.4))
+par(family="serif",cex.axis=1.2,mar=c(2,2,1,1),oma=c(1,3,1,2),mgp=c(3,1,0));
+plot(S79~Date,USGS.dat.xtab,type="n",ylim=ylim.val,xlim=xlim.val,xaxs="i",yaxs="i",xaxt="n",yaxt="n",xlab=NA,ylab=NA)
+abline(h=ymaj,v=xmaj,lty=3,col="grey")
+with(USGS.dat.xtab,lines(Date,S79,col=cols[1],lwd=2))
+with(USGS.dat.xtab,lines(Date,S77,col=cols[2],lwd=2,lty=2))
+with(USGS.dat.xtab,lines(Date,C43BasinFlow,col=cols[3],lwd=2,lty=3))
+axis_fun(1,xmaj,xmin,format(xmaj,"%m/%d/%Y"),cex.axis=1)
+axis_fun(2,ymaj,ymin,ymaj,cex.axis=1)
+box(lwd=lwd.val)
+mtext("Date (MM/DD/YYYY)",side=1,line=2.5,cex=1.5)
+mtext("Flow (cfs)",side=2,line=3.5,cex=1.5)
+
+plot(0:1,0:1,type="n",yaxt="n",xaxt="n",bty="n")
+legend(0.5,0.5,
+       legend=c("S-79 (to Estuary)","S-77 (from Lake)","C-43 Basin Flow"),
+       col=c("palegreen3","dodgerblue","grey"),lty=c(1,2,3),lwd=c(2.5,2.5,2.5),pt.cex=2.5,ncol=3,cex=1.25,bty="n",y.intersp=1,x.intersp=0.5,xpd=NA,xjust=0.5)
+
+```
+
+<font size=4><center>S-77 (from Lake Okeechobee) and S-79 (to Tidal Basin) flow data along the C-43 and Caloosahatchee River. C-43 Basin Flow was calculated as the difference from S-77 and S-79. Data Source: USGS. </center></font>
+<font size=5 color="red"><center>Data are provisional and subject to change.</center></font>
+
+***
+
+### ***Flow and Salinity Data for the C-44/St. Lucie River and Estuary***
+
+```{r St Lucie data,include=FALSE}
+ColumnRename=function(rawData){
+  Conv.df=data.frame(conv.vals=c(paste("p",c("00010","00095","00480","00060"),sep="")),conv.defs=c("Wtemp","SpCond","Sal","Flow"))
+  Cnames=names(rawData)
+  dataColumns <- c(grep("X_", Cnames), grep("X\\d{2}", Cnames))
+  
+  for(i in dataColumns){
+    chunks <- strsplit(Cnames[i], "_")[[1]]
+    chunks=unlist(strsplit(chunks,".",fixed=T))
+    loc=toupper(chunks[chunks%in%c("TOP","Top","BOTTOM","Bottom")==T])
+    param=paste0("p",chunks[paste0("p",chunks) %in% Conv.df$conv.vals])
+    param.def=as.character(subset(Conv.df,conv.vals==param)$conv.defs)
+    flag=if(length(chunks[(chunks=="cd")])==0){NA}else{chunks[(chunks=="cd")]}
+    Cnames[i]=if(is.na(flag)==F){paste(loc,param.def,flag,sep="_")}else{paste(loc,param.def,sep="_")}
+  }
+  Cnames <- gsub("X_", "", Cnames)
+  names(rawData) <- Cnames
+  return(rawData)
+}
+
+
+End.Date=as.Date(Sys.time()); ## Update this value
+Start.Date=as.Date(End.Date-duration(30,"days"));
+
+## Surface Temperature and Sp. Conductivity for sites within the St.Lucie
+#SFWMD Spc Data Data
+stl.spc.dat=SFWMD.DBHYDRO.Data.breakpoint(Start.Date,End.Date,c("IX678","IX675"))
+stl.station=data.frame(STATION.Param=c("HR1+WT1","HR1+C1"),SITE=c("HR1","HR1"),PARAM=c("Temp","Cond"))
+stl.spc.dat=merge(x=stl.spc.dat,y=stl.station,by.x="Station",by.y="STATION.Param",all.x=T)
+stl.spc.dat$Data.Value=with(stl.spc.dat,ifelse(Data.Value<0,NA,Data.Value))
+
+stl.spc.dat.xtab=cast(stl.spc.dat,SITE+DATE~PARAM,value="Data.Value",mean)
+stl.spc.dat.xtab=data.frame(stl.spc.dat.xtab,Sal=NA)
+
+sites=c("02277100","02277110")
+params=c("00010","00095","00480");#temp, spc,sal
+stl.USGS.dat=NA
+for(i in 1:length(sites)){
+  tmp=readNWISdv(sites[i],params,format(Start.Date,"%Y-%m-%d"),format(End.Date,"%Y-%m-%d"))
+  tmp=ColumnRename(tmp)
+  stl.USGS.dat=rbind(stl.USGS.dat,tmp)
+}
+stl.USGS.dat=merge(stl.USGS.dat,data.frame(site_no=c("02277100","02277110"),SITE=c("STL_RIVER","STL_STPT")),by="site_no")
+stl.USGS.dat$Date=as.POSIXct(strptime(stl.USGS.dat$Date,"%F"),tz="EST")
+
+vars=c("SITE","Date","TOP_Wtemp","TOP_SpCond","TOP_Sal")
+usgs.dat=stl.USGS.dat[,vars]
+colnames(usgs.dat)=c("SITE", "DATE","Temp","Cond","Sal")
+stl.dat=rbind(usgs.dat,stl.spc.dat.xtab)
+
+stl.dat$Calc.Sal=with(stl.dat,SalinityCalc(Cond,Temp))
+stl.dat$Sal.Final=with(stl.dat,ifelse(is.na(Sal)==T,Calc.Sal,Sal))
+stl.dat$Sal.Final=with(stl.dat,ifelse(Sal.Final<0|Sal.Final==0,NA,Sal.Final))
+
+stl.dat$MovingAvg.7d=with(stl.dat,ave(Sal.Final,SITE,FUN=function(x) rollapplyr(x,7,fill=NA,align="right",FUN=function(x) mean(x,na.rm=T))))
+
+## Flow Data
+stl.FlowDBK=data.frame(DBKEY=c("DJ238","DJ239","91295","91607","91606"),SITE=c("S80","S308","GORDY","S49","S48"))
+stl.flow.da=data.frame()
+for(i in 1:nrow(stl.FlowDBK)){
+tmp=SFWMD.DBHYDRO.Data.daily(Start.Date,End.Date,stl.FlowDBK$DBKEY[i])
+tmp$DBKEY=as.character(stl.FlowDBK$DBKEY[i])
+stl.flow.da=rbind(stl.flow.da,tmp)
+}
+stl.flow.da=merge(stl.flow.da,stl.FlowDBK,by="DBKEY")
+stl.flow.da$DATE=as.POSIXct(strptime(stl.flow.da$Date,"%F"),tz="EST")
+
+vars=c("SITE","DATE","Data.Value")
+stl.flow=stl.flow.da[,vars]
+stl.flow.xtab=cast(stl.flow,DATE~SITE,value="Data.Value",mean)
+stl.flow.xtab$C44Basin=with(stl.flow.xtab,S80-S308)
+
+##Subset Data to exclude current day
+YEST=TODAY-duration(1,"days")
+stl.dat=subset(stl.dat,DATE<TODAY)
+stl.flow.xtab=subset(stl.flow.xtab,DATE<TODAY)
+stl.flow.xtab$TFlow_STL=rowSums(stl.flow.xtab[,c("S80","S308")],na.rm=T)
+stl.flow.xtab$TFlow_NorthFork=rowSums(stl.flow.xtab[,c("GORDY","S49","S48")])
+
+```
+
+```{r Stl Instant Sal plot,echo=FALSE,fig.width=8,fig.height=5,fig.align='center'}
+STLSITES=c("HR1","STL_RIVER","STL_STPT")
+station.label=c("HR1","US1","A1A")
+EDate.plot=as.Date(Sys.time())+duration(1,"days")
+SDate.plot=as.Date(EDate.plot-duration(14,"days"))
+lwd.val=1
+ylim.val=c(0,40);by.y=10
+ymaj=seq(ylim.val[1],ylim.val[2],by.y)
+ymin=seq(ylim.val[1],ylim.val[2],by.y/2)
+xlim.val=as.POSIXct(strptime(c(SDate.plot,EDate.plot),"%F"),tz="EST")
+xmaj=seq(xlim.val[1],xlim.val[2],by="7 days")
+xmin=seq(xlim.val[1],xlim.val[2],by="1 days")
+colrmp=blue2green(5) 
+txt.cex=2
+
+par(family="serif",mar=c(1,2.5,1,1),oma=c(12,3,4,1),mgp=c(3,1,0));
+layout(matrix(c(1,2,3),1,3,byrow=F));
+for(i in 1:3){
+plot(Sal.Final~DATE,subset(stl.dat,SITE==STLSITES[i]),type="n",ylim=ylim.val,xlim=xlim.val,xaxt="n",xaxs="i",xlab=NA,yaxt="n",yaxs="i",ylab=NA,lwd=2,col=colrmp[i])
+xx=c(xlim.val[1],xlim.val[1],xlim.val[2],xlim.val[2])
+yy=c(0,5,5,0);polygon(x=xx,y=yy,col="peachpuff1")
+yy2=c(35,40,40,35);polygon(x=xx,y=yy2,col="peachpuff1")
+yy3=c(30,35,35,30);polygon(x=xx,y=yy3,col="khaki")
+yy4=c(5,10,10,5);polygon(x=xx,y=yy4,col="khaki")
+yy5=c(10,30,30,10);polygon(x=xx,y=yy5,col="darkseagreen2")
+abline(h=ymin)
+with(subset(stl.dat,SITE==STLSITES[i]),pt_line(DATE,Sal.Final,1,colrmp[i],2,21,colrmp[i],cex=2,pt.col=colrmp[i]))
+axis_fun(1,xmaj,xmin,format(xmaj,"%m/%d"),cex.axis=1)
+axis_fun(2,ymaj,ymin,ymaj,cex.axis=1)
+mtext(side=3,station.label[i],line=1,cex=txt.cex*0.5)
+box(lwd=lwd.val*1.5)
+}
+mtext(side=1,"Oyster Salinity Condition",line=5,cex=1.25,outer=T)
+mtext(side=2,"Salinity (PSU)",line=0.75,cex=1.5,outer=T)
+mtext("Month/Day",side=1,line=3,cex=1.5,outer=T)
+xleg=strptime(SDate.plot-9,"%Y-%m-%d")
+legend(xleg,-13,legend=c("Poor(<5 or >35)","Fair (5-10 or 30-35)","Good(10-30)"),pch=c(22,22,22),pt.bg=c("peachpuff1","khaki","darkseagreen2"),       pt.cex=3,ncol=1,cex=1.5,bty="n",y.intersp=1,x.intersp=0.75,xpd=NA,xjust=0.5)
+```
+
+<font size=4><center>Daily average salinity data for the last 14-days from sampling locations within the St. Lucie Estuary relative to oyster health conditions.</center></font>
+<font size=5 color="red"><center>Data are provisional and subject to change.</center></font>
+
+```{r STL 7d plots, echo=FALSE,fig.width=7,fig.height=5,fig.align='center'}
+par(family="serif",cex.axis=1.2,mar=c(1,2,1,1),oma=c(6.5,2,1,1),mgp=c(3,1,0));
+
+STLSITES=c("HR1","STL_RIVER","STL_STPT")
+EDate.plot=as.Date(Sys.time())+duration(1,"days")
+SDate.plot=as.Date(EDate.plot-duration(14,"days"))
+lwd.val=1
+xlim.val=as.POSIXct(strptime(c(SDate.plot,EDate.plot),"%Y-%m-%d"))
+ylim.val=c(0,40)
+xaxis.lab=(seq(xlim.val[1],xlim.val[2],by="7 days"))
+xaxis.lab.minor=as.numeric(seq(xlim.val[1],xlim.val[2],by="1 days"))
+colrmp=blue2green(10)
+txt.cex=1.5
+
+cols=c("forestgreen","red","blue")
+lwd.val=1
+plot(MovingAvg.7d~DATE,stl.dat,type="n",ylim=ylim.val,xlim=xlim.val,xaxs="i",yaxs="i",yaxt="n",xaxt="n",ylab=NA,xlab=NA)
+xx=c(xlim.val[1],xlim.val[1],xlim.val[2],xlim.val[2])
+yy=c(0,5,5,0);polygon(x=xx,y=yy,col="peachpuff1")
+yy2=c(35,40,40,35);polygon(x=xx,y=yy2,col="peachpuff1")
+yy3=c(30,35,35,30);polygon(x=xx,y=yy3,col="khaki")
+yy4=c(5,10,10,5);polygon(x=xx,y=yy4,col="khaki")
+yy5=c(10,30,30,10);polygon(x=xx,y=yy5,col="darkseagreen2")
+abline(h=seq(0,40,5))
+for(i in 1:3){with(subset(stl.dat,SITE==STLSITES[i]),lines(DATE,MovingAvg.7d,lwd=3,col=cols[i]))}
+axis_fun(1,xmaj,xmin,format(xmaj,"%m/%d/%Y"),cex.axis=1)
+axis_fun(2,ymaj,ymin,ymaj,cex.axis=1)
+box(lwd=lwd.val*1.5)
+xleg=strptime(min(xlim.val)+ddays(7),"%Y-%m-%d")
+mtext("Date (MM/DD/YYYY)",side=1,line=2.5,cex=1.5)
+mtext("Salinity (PSU)",side=2,line=2.5,cex=1.5)
+
+legend(xleg,-10,
+       legend=c("HR-1","US1","AlA"),
+        col=cols,lty=c(1,1,1),lwd=c(2,2,2),pt.cex=2.5,ncol=3,cex=1.5,bty="n",y.intersp=1,x.intersp=0.5,xpd=NA,xjust=0.5)
+legend(xleg,-15,
+       legend=c("Salinity Condition:","Poor(<5 or >35)","Fair (5-10 or 30-35)","Good(10-30)"),
+       pch=c(NA,22,22,22),pt.bg=c(NA,"peachpuff1","khaki","darkseagreen2"),
+     pt.cex=2,ncol=4,cex=1,bty="n",y.intersp=1,x.intersp=0.75,xpd=NA,xjust=0.5)
+
+```
+
+<font size=4><center>Moving 7-day average salinities observed at the US1, A1A and North Fork (HR1) salinity monitoring stations relative to Oyster salinity health conditions in the St. Lucie estuary.</center></font>
+<font size=5 color="red"><center>Data are provisional and subject to change.</center></font>
+
+```{r StL Flow plot1, echo=FALSE,fig.width=9,fig.height=5,fig.align='center'}
+par(family="serif",cex.axis=1.2,mar=c(1,3,1,1),oma=c(2,3,2.5,1),mgp=c(3,1,0));
+
+ylim.val1=c(-20,ifelse(max(stl.flow.xtab$TFlow_STL,na.rm=T)<1000,8000,ifelse(max(stl.flow.xtab$TFlow_STL,na.rm=T)<5000,5000,8000)))
+ylim.val2=c(-20,ifelse(max(stl.flow.xtab$TFlow_NorthFork,na.rm=T)<1000,1000,ifelse(max(stl.flow.xtab$TFlow_NorthFork,na.rm=T)<5000,5000,8000)))
+xlim.val=as.POSIXct(strptime(c(as.Date(Sys.time()-duration(30,"days")),as.Date(Sys.time()+duration(3,"days"))),"%Y-%m-%d"),tz="EST")
+
+ymaj1=seq(0,ylim.val1[2],ylim.val1[2]/5)
+ymin1=seq(0,ylim.val1[2],ylim.val1[2]/10)
+ymaj2=seq(0,ylim.val2[2],ylim.val2[2]/5)
+ymin2=seq(0,ylim.val2[2],ylim.val2[2]/10)
+
+xmaj=seq(xlim.val[1],xlim.val[2],by="7 days")
+xmin=seq(xlim.val[1],xlim.val[2],by="1 days")
+#xleg=strptime(((xlim.val[2]-xlim.val[1])/2)+xlim.val[1],"%Y-%m-%d")
+lwd.val=1.5
+layout(matrix(1:4,2,2,byrow=T),widths=c(2,2,1,1),heights=c(2,0.4,2,0.4));
+
+plot(S80~DATE,stl.flow.xtab,type="n",ylim=ylim.val1,xlim=xlim.val,xaxs="i",yaxs="i",xaxt="n",yaxt="n",xlab=NA,ylab=NA)
+abline(h=ymaj1,v=xmaj,lty=3,col="grey")
+with(stl.flow.xtab,lines(DATE,S80,lty=1,lwd=2,col="palegreen3"))
+with(stl.flow.xtab,lines(DATE,S308,lty=1,lwd=2,col="dodgerblue"))
+with(stl.flow.xtab,lines(DATE,C44Basin,lty=1,lwd=2,col="grey"))
+axis_fun(1,xmaj,xmin,format(xmaj,"%m-%d"),cex.axis=1)
+axis_fun(2,ymaj1,ymin1,ymaj1,cex.axis=1)
+box(lwd=lwd.val)
+mtext("Flow (cfs)",side=2,line=3.5,cex=1.5)
+mtext("South Fork Flows",side=3,line=0.25,cex=1.5)
+
+plot(S80~DATE,stl.flow.xtab,type="n",ylim=ylim.val2,xlim=xlim.val,xaxs="i",yaxs="i",xaxt="n",yaxt="n",xlab=NA,ylab=NA)
+abline(h=ymaj2,v=xmaj,lty=3,col="grey")
+with(stl.flow.xtab,lines(DATE,GORDY,lty=1,lwd=2,col="tomato"))
+with(stl.flow.xtab,lines(DATE,S49,lty=2,lwd=2,col="lightsteelblue3"))
+with(stl.flow.xtab,lines(DATE,S48,lty=4,lwd=2,col="lightgoldenrod3"))
+axis_fun(1,xmaj,xmin,format(xmaj,"%m-%d"),cex.axis=1)
+axis_fun(2,ymaj2,ymin2,ymaj2,cex.axis=1)
+box(lwd=lwd.val)
+mtext("North Fork Flows",side=3,line=0.25,cex=1.5)
+
+plot(0:1,0:1,type="n",yaxt="n",xaxt="n",bty="n")
+legend(0.5,0.5,legend=c("S-80 (to Estuary)","S-308 (from Lake)","C-44 Basin"),col=c("palegreen3","dodgerblue","grey"),lty=c(1,1,1),lwd=c(2.5,2.5,2.5),pt.cex=2.5,ncol=1,cex=1,bty="n",y.intersp=1,x.intersp=0.5,xpd=NA,xjust=0.7)
+
+plot(0:1,0:1,type="n",yaxt="n",xaxt="n",bty="n")
+legend(0.5,0.5,legend=c("Gordy Road","S-49","S-48"),col=c("tomato","lightsteelblue3","lightgoldenrod3"),lty=c(1,2,4),lwd=c(2.5,2.5,2.5),pt.cex=2.5,ncol=1,cex=1,bty="n",y.intersp=1,x.intersp=0.5,xpd=NA,xjust=0.6)
+
+mtext("Date (MM/DD)",side=1,line=-2,cex=1.5,outer=T)
+```
+
+<font size=4><center>Left:S-80 (to Tidal Basin), S-308 (from Lake Okeechobee) and C-44 Basin flows (calculated as the difference from S-308 and S-80). Right: Gordy Road (from Ten-Mile Creek Basin), S-49 (from C-24 Basin) and S-48 (from C-23 Basin) flows. Data Source: SFWMD.</center></font>
+<font size=5 color="red"><center>Data are provisional and subject to change.</center></font>
+
+***
+
+### ***Salinity Data for Florida Bay***
+
+```{r FB Data, include=FALSE}
+End.Date=as.Date(Sys.time()); ## Update this value
+Start.Date=as.Date(End.Date-duration(30,"days"));
+
+FB.sites=data.frame(SITE=c("GB","BK","MK","TC","TR","TB","LM","LB","DK","WB","JK","BS","BN","BA","LR"),DBKEY=c("63617","63578","63667","63687","AL633","63683","63642","63638","63608","63695","63634","63588","63581","63572","63654"))
+FB.sites=subset(FB.sites,SITE!="TC")
+FB.sites=subset(FB.sites,SITE!="MK")
+fb.sal.dat=NA
+for(i in 1:nrow(FB.sites)){
+tmp=SFWMD.DBHYDRO.Data.daily(Start.Date,End.Date,FB.sites$DBKEY[i])
+tmp$DBKEY=as.character(FB.sites$DBKEY[i])
+fb.sal.dat=rbind(tmp,fb.sal.dat)
+
+}
+
+fb.sal.dat=merge(fb.sal.dat,FB.sites,"DBKEY")
+fb.sal.dat$Date=date.fun(fb.sal.dat$Date)
+fb.sal.dat=fb.sal.dat[order(fb.sal.dat$SITE,fb.sal.dat$Date),]
+
+```
+
+
+```{r FB Sal Plot,echo=FALSE,echo=FALSE,fig.width=9.5,fig.height=7,fig.align='center'}
+  FB.SITE=c("GB","TB","LM","TR","TC","BK","JK","WB","DK","LB","MK","LR","BA","BN","BS")
+  xlim.val=date.fun(c(End.Date-ddays(13),End.Date+ddays(1)))
+  xmaj=seq(xlim.val[1],xlim.val[2],by="7 days");xmin=seq(xlim.val[1],xlim.val[2],by="1 days")
+  ylim.val=c(0,55);by.y=15;ymaj=seq(ylim.val[1],ylim.val[2],by.y);ymin=seq(ylim.val[1],ylim.val[2],by.y/2)
+  
+  par(family="serif",cex.axis=1.2,mar=c(2,3,1,1),oma=c(5,3,2.5,1),mgp=c(3,1,0));
+  layout(matrix(c(1:15),3,5,byrow=T));
+  
+  for(i in 1:length(FB.SITE)){
+    plot(Data.Value~Date,fb.sal.dat,type="n",yaxt="n",xaxt="n",ylab=NA,xlab=NA,ylim=ylim.val,xlim=xlim.val)
+    abline(v=xmaj,h=ymaj,lty=3,col="grey")  
+    with(subset(fb.sal.dat,SITE==FB.SITE[i]),pt_line(Date,Data.Value,2,adjustcolor("dodgerblue1",0.25),3,21,adjustcolor("dodgerblu  e1",0.5),2,pt.col="dodgerblue1"))
+    if(FB.SITE[i]=="TR"){abline(h=30,col="red",lwd=2)}else{NA}
+    mtext(side=3,line=-1.5,FB.SITE[i],cex=1.25)
+    axis_fun(1,xmaj,xmin,format(xmaj,"%m/%d"),cex.axis=1.5)
+    axis_fun(2,ymaj,ymin,ymaj,cex.axis=1.5)
+    box(lwd=1)
+  }
+  mtext(side=1,line=1,"Month-Day",outer=T,cex=1.75)
+  mtext(side=2,"Salinity (PSU)",outer=T,cex=1.75)
+```
+<font size=4><center>Daily average salinity data for the last 14-days from select sampling locations within Florida Bay.</center></font>
+<font size=5 color="red"><center>Data are provisional and subject to change.</center></font>
+
+### ***Monitoring Locations and Data Sources***
+```{r map data,include=FALSE}
+dat=data.frame(Lat=c(26.48,26.52,26.56,26.65,26.72,26.84,27.14,26.96,26.82,26.90,27.21,26.86,26.78,27.11,27.20,27.26,27.40,26.98,27.23,27.20,27.20),
+               Long=c(-82.01,-82.00,-81.92,-81.86,-81.69,-81.09,-80.79,-80.97,-80.78,-80.79,-80.80,-80.63,-80.96,-80.29,-80.30,-80.36,-80.40,-80.62,-80.29,-80.26,-80.21),
+               Station=c("Sanibel","Shell Point","Cape Coral","Fort Myers","S79","S77","L001","L005","L006","LZ40","S133TW","S352HW","S4TW","S80","S48","S49","Gordy Road","S308","HR1","US1","A1A"),
+           Database.Name=c("SANIB1","MARKH","CCORAL","FORTMYERSM","02292900","02292010","L001","L005","L006","LZ40","S133TW","S352HW","S4TW","S80_S","S48_S","S49_S","GORDY","S308_S","HR1","02277100","02277110"),
+           Data.Source=c(rep("DBHydro",4),"USGS NWIS","USGS NWIS",rep("DBHydro",13),rep("USGS NWIS",2)),
+           Parameter=c(rep("Salinity",4),"Flow","Flow",rep("Stage",7),rep("Flow",5),rep("Salinity",3)))
+fb.dat=data.frame(Lat=c(25.167,25.12,25.106,c(25.21,25.217,25.176,25.157),c(25.053,25.073,25.180,25.235),c(24.981,25.027,25.087,25.178)),
+               Long=c(-80.80,-80.83,-80.942,c(-80.53,-80.649,-80.632,-80.725),c(-80.904,-80.735,-80.490,-80.457),c(-80.825,-80.681,-80.519,-80.438)),
+               Station=c("GB","BK","MK","TC","TR","LM","TB","JK","WB","DK","LB","LR","BA","BN","BS"),
+           Database.Name=paste("ENP",c("GB","BK","MK","TC","TR","ENPLM","TB","JK","WB","DK","LB","LR","BA","BN","BS"),sep=""),
+           Data.Source="DBHydro",
+           Parameter="Salinity")
+dat=rbind(dat,fb.dat)
+#,col=c(rep("blue",4),rep("red",2),rep("green",7),rep("red",5),rep("blue",3)))
+#dat$LatLong=with(dat,paste(Lat,Long,sep=":"))
+dat$Tip=with(dat,paste("Station: ",Station,"<BR>Data Source: ",Data.Source,"<BR>Parameter: ",Parameter,sep=""))
+```
+
+```{r map,echo=FALSE,fig.width=7,fig.height=5,fig.align='center'}
+
+leaflet(width="100%") %>%
+  setView(lng=-80.78,lat=26.3,zoom=8)%>%
+  #setView(lng=-80.89,lat=26.9,zoom=8)%>%
+  addTiles()%>%
+  addMarkers(lng=dat$Long,lat=dat$Lat,popup=dat$Tip)
+
+```
+
+<font size=3><center>Monitoring locations for Lake Okeechobee stage elevation and estuary salinity tracking.</center></font>
+
+
+
+***
+
+```{r ,out.width="5%",fig.align="center",echo=F}
+knitr::include_graphics("https://floridadep.gov/system/files/styles/general_page_images__scaled_to_900_pixels_/private/media-folders/media-root/in-house-graphic-DEP%20Logo%20color%20Large.png?itok=wm1GoIhx")
+```
+
+<font size=6 face="Times New Roman, Times, serif"><center>Office of Ecosystem Projects</center></font>
