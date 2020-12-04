@@ -1,0 +1,128 @@
+---
+title: "DRAFT: Comparison of relative fluorescence and grab sample Chlorophyll"
+author: "Paul Julian"
+date: "9/9/2020"
+output: html_document
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+library(AnalystHelper);#devtools::install_github("SwampThingPaul/AnalystHelper")
+library(plyr)
+library(reshape)
+
+library(dataRetrieval)
+
+library(flextable)
+library(kableExtra)
+library(broom)
+
+```
+
+## Objective
+
+* Compare sensor based relative fluorescence Chlorophyll data with grab sample Chlorophyll-a data collected upstream of the S-79. 
+
+## Data Source and Analysis
+
+Date was retrieved from the United States Geological Survey (USGS) National Water Information System (NWIS) and the South Florida Water Management District (SFWMD) online environmental database DBHYDRO between November 2017 and September 2020 for the mointoring location upstream of the S-79. Upstream of the S-79 daily relative fluoresence chlorophyll (fChl) data was collected at an "upstream" and "floating" monitoring location. Grab sample chlorophyll-a (Chl-a) data were collected at a fix mointoring location upstream of the S-79. Grab sample data were screened based on field and laboratory qualifer codes and any data associated with fatal qualifers were removed prior to analysis. For purposes of data analysis data reported as less than the method detection limit (MDL) were assigned a value of one half the MDL.
+
+Grab sample Chl-a were paired with fChl data to relate the relative fluoresnce measurements to an approximate Chlorophyll-a concentration using a simple linear model and all parametric assumptions were verified. Both fChl and Chl-a concentration were log-transformed to fit the assumptions of the statistical test. To determine a threshold that reflect adverse biological effects (i.e. 20 $\mu g$ $L^{-1}$; 62-302.531 FAC), the model was solved for the lower 95\% confidence interval at a grab sample concentration of 20 $\mu g$ $L^{-1}$. 
+
+```{r,include=FALSE,echo=FALSE}
+dates=date.fun(c("2017-11-01","2020-09-01"))
+
+usgs.dat=readNWISdv("02292900",c("32295","32315","32321","63680"),dates[1],dates[2])
+usgs.dat=renameNWISColumns(usgs.dat,p32295="fDOM",p32315="fChl",p32321="fPC",p63680="Turb")
+usgs.dat$Date=date.fun(usgs.dat$Date)
+usgs.dat$fChl=rowMeans(usgs.dat[,c("UPSTREAM_fChl","FLOATING_fChl")],na.rm=T)
+usgs.dat$fPC=rowMeans(usgs.dat[,c("UPSTREAM_fPC","FLOATING_fPC")],na.rm=T)
+usgs.dat$turb=rowMeans(usgs.dat[,c("UPSTREAM_Turb","FLOATING_Turb")],na.rm=T)
+
+usgs.dat2=merge(usgs.dat,data.frame(Date=date.fun(seq(dates[1],dates[2],"1 days")),fill=1),"Date",all.y=T)
+
+wmd.dat=DBHYDRO_WQ(dates[1],dates[2],"S79",c(112,179))
+
+dat=merge(usgs.dat,wmd.dat[,c("Station.ID","Date.EST","Test.Name","HalfMDL")],by.x="Date",by.y="Date.EST",all.y=T)
+dat$fChl=rowMeans(dat[,c("UPSTREAM_fChl","FLOATING_fChl")],na.rm=T)
+dat$fPC=rowMeans(dat[,c("UPSTREAM_fPC","FLOATING_fPC")],na.rm=T)
+dat$log.fChl=log(dat$fChl)
+dat$log.Chla=log(dat$HalfMDL)
+
+chl.fit=lm(log.fChl~log.Chla,dat)
+chl.fit.sum=summary(chl.fit)
+
+chl20.pred=exp(predict(chl.fit,data.frame(log.Chla=log(20)),interval="confidence"))
+```
+
+## Results
+
+During the period of record, daily relative fluorescence chlorophyll data was collected an upstream and floating  monitoring location with some overlap between montoring efforts. The overlap in mointoring indicated consistent and comparable results between the monitoring locations both sites were used in the analysis. During this same period of record, `r nrow(wmd.dat)` grab sampling events for Chl-a occurred at the S-79 mointoring location (Fig 1). 
+
+```{r overall plot,echo=FALSE,fig.width=6.5,fig.height=4,fig.align='center',fig.cap="Figure 1. Daily mean relative fluorescence chlorophyll data collected upstream of the S-79 structure by USGS and grab sample Chlorophyll-a data collected upstream of S-79 by SFWMD between November 2017 and September 2020."}
+par(family="serif",mar=c(1,2,0.5,2),oma=c(3,2,1,2));
+ylim.val=c(0,15);by.y=5;ymaj=seq(ylim.val[1],ylim.val[2],by.y);ymin=seq(ylim.val[1],ylim.val[2],by.y/2)
+xlim.val=dates;xmaj=seq(xlim.val[1],xlim.val[2],"6 months");xmin=seq(xlim.val[1],xlim.val[2],"1 months")
+ylim.val2=c(0,80);by.y2=20;ymaj2=seq(ylim.val2[1],ylim.val2[2],by.y2);ymin2=seq(ylim.val2[1],ylim.val2[2],by.y2/2)
+
+
+plot(UPSTREAM_fChl~Date,usgs.dat2,ann=F,axes=F,type="n",ylim=ylim.val,xlim=xlim.val)
+abline(h=ymaj,v=xmaj,lty=3,col="grey")
+with(usgs.dat2,pt_line(Date,UPSTREAM_fChl,2,"indianred1",1,21,"indianred1",pt.lwd=0.1))
+with(usgs.dat2,pt_line(Date,FLOATING_fChl,2,"dodgerblue1",1,21,"dodgerblue1",pt.lwd=0.1))
+axis_fun(1,xmaj,xmin,format(xmaj,"%m-%Y"))
+axis_fun(2,ymaj,ymin,ymaj);box(lwd=1)
+par(new=T);plot(HalfMDL~Date.EST,wmd.dat,ann=F,axes=F,type="n",ylim=ylim.val2,xlim=xlim.val)
+with(wmd.dat,points(Date.EST,HalfMDL,pch=21,bg="darkseagreen1",cex=1.5,lwd=0.1))
+axis_fun(4,ymaj2,ymin2,ymaj2)
+mtext(side=2,line=2,"Relative Fluorescence Chlorophyll (RFU)")
+mtext(side=4,line=2,"Chlorophyll-a (\u03BCg L\u207B\u00B9)")
+mtext(side=1,line=2,"Date (Month-Year)")
+legend("topleft",legend=c("Upstream Sensor (USGS)","Floating Sensor (USGS)","Grab Sample Chl-a (SFWMD)"),
+       pch=21,lty=0,lwd=0.1,col="black",pt.bg=c("indianred1","dodgerblue1","darkseagreen1"),
+       ncol=1,pt.cex=c(1,1,1.5),cex=1,bty="n",y.intersp=1,x.intersp=0.75,xpd=NA,xjust=0.5)
+
+```
+
+The comparison of fChl (sensor) and Chl-a (grab) resulted in a statisticall significant model (F$_{1,26}$ = `r round(as.numeric(chl.fit.sum$fstatistic[1]),2)`; $\rho$-value<0.01) with an R$^{2}$ of `r round(chl.fit.sum$r.squared,2)` (Table 1). Despite being a significant model, the low R$^{2}$ value could be attributed to variation in analytical methods where the sensor is using fluorescence to estimate total chlorophyll, not just chlorophyll-a. Additionally, the sensor based data is a daily mean value whilst a the grab sample is one sample during the day. Despite these differences, an approximate 20 $\mu g$ $L^{-1}$ could be estimated to relate the relative measure of chlorophyll to established metrics and thresholds (Fig 2). Furthermore, using the lower 95% confidence interval allows for some variability around the mean given the relationship. When solving the model ( $log(fChl) = 0.23\times log(Chla) + 0.67$ ) for 20$\mu g$ $L^{-1}$ the lower 95% confidence interval is `r round(chl20.pred[,2],1)` (RFU).
+
+```{r scatter,echo=FALSE,fig.width=6.5,fig.height=4,fig.align='center',fig.cap="Figure 2. Comparison of relative fluorescence chlorophyll data and grab sample Chlorophyll-a between November 2017 and September 2020."}
+par(family="serif",mar=c(1,2,0.5,0.5),oma=c(3,2,1,1));
+ylim.val=c(1,10);ymaj=log.scale.fun(ylim.val,"major");ymin=log.scale.fun(ylim.val,"minor");
+#by.y=5;ymaj=seq(ylim.val[1],ylim.val[2],by.y);ymin=seq(ylim.val[1],ylim.val[2],by.y/2)
+xlim.val=c(1,100);xmaj=log.scale.fun(xlim.val,"major");xmin=log.scale.fun(ylim.val,"minor")
+#by.x=20;xmaj=seq(xlim.val[1],xlim.val[2],by.x);xmin=seq(xlim.val[1],xlim.val[2],by.x/2)
+
+plot(fChl~HalfMDL,dat,ann=F,axes=F,type="n",ylim=ylim.val,xlim=xlim.val,log="xy")
+abline(h=ymaj,v=xmaj,lty=3,col="grey")
+with(dat,points(HalfMDL,fChl,pch=21,bg="darkseagreen1",lwd=0.1,cex=1.5))           
+
+xval=seq(min(dat$HalfMDL),max(dat$HalfMDL),length.out=60)
+mod.pred=exp(predict(chl.fit,data.frame(log.Chla=log(xval)),interval="confidence"))
+#shaded.range(xval,mod.pred[,2],mod.pred[,3],"grey",lty=1)
+lines(xval,mod.pred[,1])
+lines(xval,mod.pred[,2],lty=2)
+lines(xval,mod.pred[,3],lty=2)
+segments(max(xval[round(xval)<=20]),0.1,max(xval[round(xval)<=20]),max(mod.pred[round(xval)<=20,2]),col="red",lwd=1.25,lty=1)
+points(max(xval[round(xval)<=20]),max(mod.pred[round(xval)<=20,2]),pch=21,bg="red",lwd=0.1)
+axis_fun(1,xmaj,xmin,xmaj)
+axis_fun(2,ymaj,ymin,ymaj);box(lwd=1)
+mtext(side=1,line=2,"Chlorophyll-a (\u03BCg L\u207B\u00B9)")
+mtext(side=2,line=2,"Relative Fluorescence Chlorophyll (RFU)")
+legend("topleft",legend=c("Pairwise data","Log-Log Model \u00B1 95% CI","20 \u03BCg L\u207B\u00B9 equivalent"),
+       pch=c(21,NA,NA),lty=c(0,1,1),col=c("black","black","red"),pt.bg=c("darkseagreen1",NA,NA),
+       ncol=1,pt.cex=c(1.5),cex=1,bty="n",y.intersp=1,x.intersp=0.75,xpd=NA,xjust=0.5)
+```
+
+<br>
+
+```{r mod,echo=F,tab.cap="Table 1. Linear (log-log) model results comparing relative fluorescence chlorophyll data and grab sample Chlorophyll-a between November 2017 and September 2020."}
+
+as_flextable(chl.fit)%>%colformat_num(j=1:4,digits=2)
+
+```
+
+***
