@@ -967,4 +967,4 @@ leaflet(width="100%") %>%
 knitr::include_graphics("https://floridadep.gov/system/files/styles/general_page_images__scaled_to_900_pixels_/private/media-folders/media-root/in-house-graphic-DEP%20Logo%20color%20Large.png?itok=wm1GoIhx")
 ```
 
-<font size=6 face="Times New Roman, Times, serif"><center>Office of Ecosystem Projects</center></font>
+<font size=6 face="Times New Roman, Times, serif"><center>Office of Water Polic and Ecosystems Restoration</center></font>
