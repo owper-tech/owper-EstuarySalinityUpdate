@@ -1,5 +1,8 @@
 # Estuary Salinity Daily Update
- 
+
+ <!-- badges: start -->
+  [![R build status](https://github.com/owper-tech/owper-EstuarySalinityUpdate/workflows/R-CMD-check/badge.svg)](https://github.com/owper-tech/owper-EstuarySalinityUpdate/actions)
+  <!-- badges: end -->
  
 - Daily summary of: 
     - Lake Okeechobee water level
@@ -20,3 +23,4 @@ Want to contribute to this page or see an error?
 - or email [paul.julian@FloridaDEP.gov](mailto:paul.julian@floridadep.gov)
 
 ***
+
