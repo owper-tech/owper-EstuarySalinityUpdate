@@ -1,7 +1,7 @@
 # Estuary Salinity Daily Update
 
  <!-- badges: start -->
-  [![R build status](https://github.com/owper-tech/owper-EstuarySalinityUpdate/workflows/R-CMD-check/badge.svg)](https://github.com/owper-tech/owper-EstuarySalinityUpdate/actions)
+  [![R build status](https://github.com/owper-tech/owper-EstuarySalinityUpdate/workflows/render-SalinityUpdate/badge.svg)](https://github.com/owper-tech/owper-EstuarySalinityUpdate/actions)
   <!-- badges: end -->
  
 - Daily summary of: 
