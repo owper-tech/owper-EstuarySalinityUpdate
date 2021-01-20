@@ -107,6 +107,7 @@ sonde.dat.xtab$phy_chl=with(sonde.dat.xtab,PU/(PU+CU))
 
 
 # tiff(filename=paste0(plot.path,"LakeO_sonde_map.tiff"),width=3.5,height=3.75,units="in",res=200,type="windows",compression=c("lzw"),bg="white")
+# png(filename=paste0(plot.path,"LakeO_sonde_map.png"),width=3.5,height=3.75,units="in",res=200,type="windows",bg="white")
 plotRGB(im)# ,ext=raster::extent(gBuffer(lakeO,width=1)))
 plot(wmd.mon,pch=21,bg="dodgerblue1",col="white",add=T,cex=1.25)
 raster::text(wmd.mon,"SITE",col="white",pos=4,cex=0.75)

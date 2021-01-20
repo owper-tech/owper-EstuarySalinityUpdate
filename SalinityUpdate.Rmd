@@ -30,11 +30,9 @@ library(classInt)
 library(GISTools)
 library(leaflet)
 
-
 #Paths
-# path="//Fldep1/OWPER/EVG/Programmatic/WaterQuality/R_Reports/Salinity"
-# data.path="./Data/"
-#GIS.path=paste(data.path,"/GIS/",sep="")
+path="//Fldep1/OWPER/EVG/Programmatic/WaterQuality/R_Reports/Salinity"
+data.path=paste(path,"/Data/",sep="")
 
 #Current WY
 CurWY=as.numeric(ifelse(as.numeric(format(as.Date(Sys.time()),"%m"))>4,as.numeric(format(as.Date(Sys.time()),"%Y"))+1,format(as.Date(Sys.time()),"%Y")))
@@ -63,7 +61,7 @@ xmaj=seq(xlim.vals[1],xlim.vals[2],by="2 months");xmin=seq(xlim.vals[1],xlim.val
 
 ```{r LakeO Data, warnings=FALSE,echo=FALSE,include=FALSE}
 #LORS
-data(LORS)
+LORS=read.csv(paste(data.path,"LORS.csv",sep=""))
 LORS$Year=CurWY-1
 LORS$Date2=with(LORS,as.POSIXct(strptime(paste(Year,Month,Day,sep="-"),"%Y-%m-%d")))
 
@@ -341,6 +339,119 @@ mtext(side=2,"Recession/Ascension Rate (Feet 7-days\u207B\u00B9)",line=2.5,cex=1
 
 <font size=3><center>Lake Okeechobee 7-day water level recession/ascension rates during `r paste0("WY",CurWY)`. The red-point identifes the recession/ascension rate for the period of `r if(is.na(subset(LakeO.xtab, DATE==YEST)$Mean)==T){format(YEST-ddays(8),"%m/%d/%Y")}else{format(YEST-ddays(7),"%m/%d/%Y")}` - `r if(is.na(subset(LakeO.xtab, DATE==YEST)$Mean)==T){format(YEST-ddays(1),"%m/%d/%Y")}else{format(YEST,"%m/%d/%Y")}`. Negative values indicate falling water levels (recession) and positive values indicate raising water level (ascension) during this 7-day period .</center></font>
 <font size=4 color="red"><center>Data are provisional and subject to change.</center></font>
+
+
+
+
+### ***Lake Okeechobee Relative Algae Condition***
+
+```{r LO sonde, warnings=FALSE,echo=FALSE,include=FALSE}
+dates=c(Start.Date,End.Date)
+sites.dat=data.frame(Station.ID=c(rep("L001",5),rep("POLESOUT1",5),rep("POLESOUT3",5),rep("L005",5),rep("LZ40",5),rep("L006",5)),
+                     param=rep(c("CF","CU","PF","PU","TURB"),6),
+                     DBKEY.da=c(39923,39924,39925,39926,39922,
+                                39959,39960,39961,39962,39958,
+                                39975,39976,39977,39981,39974,
+                                39886,39888,39889,39890,39885,
+                                39941,39942,39943,39944,39940,
+                                39905,39906,39907,39908,39904),depth="surface")
+sonde.dat=data.frame()
+for(i in 1:length(unique(sites.dat$Station.ID))){
+  site.tmp=subset(sites.dat,Station.ID==unique(sites.dat$Station.ID)[i])
+  site.tmp$DBKEY.da=as.character(site.tmp$DBKEY.da)
+  tmp.dat=DBHYDRO_daily(dates[1],dates[2],site.tmp$DBKEY.da)
+  tmp.dat$DBKEY=as.character(tmp.dat$DBKEY)
+  tmp.dat=merge(tmp.dat,site.tmp,by.x="DBKEY",by.y="DBKEY.da")
+  sonde.dat=rbind(sonde.dat,tmp.dat)  
+  print(i)
+}
+
+sonde.dat.xtab=cast(sonde.dat,Station.ID+Date~param,value="Data.Value",mean)
+sonde.dat.xtab$Date=date.fun(sonde.dat.xtab$Date)
+sonde.dat.xtab$Date.num=as.numeric(sonde.dat.xtab$Date)
+sonde.dat.xtab$phy_chl=with(sonde.dat.xtab,PU/(PU+CU))
+
+```
+
+
+```{r, out.width="40%",echo=FALSE,fig.align="center"}
+knitr::include_graphics("LakeO_sonde_map.png")
+```
+
+<font size=4><center> Sonde monitoring locations within Lake Okeechobee conducted by SFWMD.</center></font>
+
+```{r LO sonde plot,echo=FALSE,fig.width=8,fig.height=5,fig.align='center'}
+EDate.plot=as.Date(Sys.time())+duration(5,"days")
+SDate.plot=as.Date(EDate.plot-duration(14,"days"))
+xlim.val=as.POSIXct(strptime(c(SDate.plot,EDate.plot),"%Y-%m-%d"),tz="EST")
+xmaj=seq(xlim.val[1],xlim.val[2],by="7 days");xmin=seq(xlim.val[1],xlim.val[2],by="1 days")
+
+par(family="serif",mar=c(1,1.5,0.25,0.25),oma=c(2.5,5.5,1,0.5));
+layout(matrix(c(1:24),4,6,byrow=F))
+
+site.list=unique(sites.dat$Station.ID)
+for(i in 1:length(site.list)){
+tmp.dat=subset(sonde.dat.xtab,Station.ID==site.list[i])
+axisln.val=3
+ylim.val=c(0,100);by.y=50;ymaj=seq(ylim.val[1],ylim.val[2],by.y);ymin=seq(ylim.val[1],ylim.val[2],by.y/2)
+plot(CF~Date,tmp.dat,ylim=ylim.val,xlim=xlim.val,type="n",axes=F,ylab=NA,xlab=NA)
+abline(h=ymaj,v=xmaj,lty=3,col="grey")
+with(tmp.dat,pt_line(Date,CU,2,"mediumspringgreen",1,21,"mediumspringgreen",pt.lwd=0.1,cex=1.25))
+# tmp.loess=loess(CU~Date.num,tmp.dat)
+# fit=predict(tmp.loess,tmp.dat)
+# lines(tmp.dat$Date,fit,col="indianred1",lwd=2)
+axis_fun(1,xmaj,xmin,NA)
+if(i==1){axis_fun(2,ymaj,ymin,ymaj)}else{axis_fun(2,ymaj,ymin,NA)}
+box(lwd=1)
+if(i==1){mtext(side=2,line=axisln.val,"Chlorophyll\n(\u03BCg L\u207B\u00B9)")}
+mtext(side=3,adj=0,site.list[i],cex=0.75)
+
+ylim.val=c(0,1500);by.y=500;ymaj=seq(ylim.val[1],ylim.val[2],by.y);ymin=seq(ylim.val[1],ylim.val[2],by.y/2)
+plot(PF~Date,tmp.dat,ylim=ylim.val,xlim=xlim.val,type="n",axes=F,ylab=NA,xlab=NA)
+abline(h=ymaj,v=xmaj,lty=3,col="grey")
+with(tmp.dat,pt_line(Date,PU,2,"lightseagreen",1,21,"lightseagreen",pt.lwd=0.1,cex=1.25))
+# if(sum(is.na(tmp.dat$PU))/nrow(tmp.dat)==1){NA}else{
+#   tmp.loess=loess(PU~Date.num,tmp.dat)
+#   fit=predict(tmp.loess,tmp.dat)
+#   lines(tmp.dat$Date,fit,col="indianred1",lwd=2)}
+axis_fun(1,xmaj,xmin,NA)
+if(i==1){axis_fun(2,ymaj,ymin,ymaj)}else{axis_fun(2,ymaj,ymin,NA)}
+box(lwd=1)
+if(i==1){mtext(side=2,line=axisln.val,"Phycocyanin\n(\u03BCg L\u207B\u00B9)")}
+
+ylim.val=c(0,1.1);by.y=0.5;ymaj=seq(ylim.val[1],ylim.val[2],by.y);ymin=seq(ylim.val[1],ylim.val[2],by.y/2)
+plot(phy_chl~Date,tmp.dat,ylim=ylim.val,xlim=xlim.val,type="n",axes=F,ylab=NA,xlab=NA)
+abline(h=ymaj,v=xmaj,lty=3,col="grey")
+with(tmp.dat,pt_line(Date,phy_chl,2,"grey",1,21,"grey",pt.lwd=0.1,cex=1.25))
+# if(sum(is.na(tmp.dat$phy_chl))/nrow(tmp.dat)==1){NA}else{
+#   tmp.loess=loess(phy_chl~Date.num,tmp.dat)
+#   fit=predict(tmp.loess,tmp.dat)
+#   lines(tmp.dat$Date,fit,col="indianred1",lwd=2)}
+# axis_fun(1,xmaj,xmin,NA)
+if(i==1){axis_fun(2,ymaj,ymin,format(ymaj))}else{axis_fun(2,ymaj,ymin,NA)}
+box(lwd=1)
+if(i==1){mtext(side=2,line=axisln.val,expression(paste(frac("Phyco","Phyco + Chl"))),adj=0.5)}
+
+ylim.val=c(0,250);by.y=50;ymaj=seq(ylim.val[1],ylim.val[2],by.y);ymin=seq(ylim.val[1],ylim.val[2],by.y/2)
+plot(TURB~Date,tmp.dat,ylim=ylim.val,xlim=xlim.val,type="n",axes=F,ylab=NA,xlab=NA)
+abline(h=ymaj,v=xmaj,lty=3,col="grey")
+with(tmp.dat,pt_line(Date,TURB,2,"grey",1,21,"lightgoldenrod2",pt.lwd=0.1,cex=1.25))
+# tmp.loess=loess(TURB~Date.num,tmp.dat)
+# fit=predict(tmp.loess,tmp.dat)
+# lines(tmp.dat$Date,fit,col="indianred1",lwd=2)
+axis_fun(1,xmaj,xmin,format(xmaj,"%m-%d"),line=-0.5)
+if(i==1){axis_fun(2,ymaj,ymin,ymaj)}else{axis_fun(2,ymaj,ymin,NA)}
+box(lwd=1)
+if(i==1){mtext(side=2,line=axisln.val,"Turbidity\n(NTU)")}
+}
+mtext(side=1,outer=T,line=1,"Date (Month-Day)")
+
+```
+
+<font size=4><center> Daily Chlorophyll, Phycocyanin,relative ratio of Phycocyanin (Phyco) relative to Phyco and Chlorophyll (Chl) and Turbidity within Lake Okeechobee monitored by SFWMD.</center></font>
+<font size=5 color="red">
+<center>Data are provisional and subject to change.</center></font>
+
 
 <br>
 
@@ -942,7 +1053,13 @@ fb.dat=data.frame(Lat=c(25.167,25.12,25.106,c(25.21,25.217,25.176,25.157),c(25.0
            Database.Name=paste("ENP",c("GB","BK","MK","TC","TR","ENPLM","TB","JK","WB","DK","LB","LR","BA","BN","BS"),sep=""),
            Data.Source="DBHydro",
            Parameter="Salinity")
-dat=rbind(dat,fb.dat)
+LakeO.sonde=data.frame(Lat=c(27.14,27.03,26.99,26.96,26.90,26.82),
+                       Long=c(-80.79,-80.90,-80.87,-80.97,-80.79,-80.78),
+                       Station=c("L001","POLESOUT1","POLESOUT3","L005","LZ40","L006"),
+                       Database.Name=c("L001-S","POLESOUT1-S","POLESOUT3-S","L005-S","LZ40-S","L006-S"),
+                       Data.Source="DBHydro",
+                       Parameter="Chlorophyll, Phycocyanin and Turbitiy")
+dat=rbind(dat,fb.dat,LakeO.sonde)
 #,col=c(rep("blue",4),rep("red",2),rep("green",7),rep("red",5),rep("blue",3)))
 #dat$LatLong=with(dat,paste(Lat,Long,sep=":"))
 dat$Tip=with(dat,paste("Station: ",Station,"<BR>Data Source: ",Data.Source,"<BR>Parameter: ",Parameter,sep=""))
@@ -964,8 +1081,6 @@ leaflet(width="100%") %>%
 
 ***
 
-```{r ,out.width="5%",fig.align="center",echo=F}
-knitr::include_graphics("https://floridadep.gov/system/files/styles/general_page_images__scaled_to_900_pixels_/private/media-folders/media-root/in-house-graphic-DEP%20Logo%20color%20Large.png?itok=wm1GoIhx")
-```
+<center>![FDEP](deplogo.png)</center>
 
-<font size=6 face="Times New Roman, Times, serif"><center>Office of Water Polic and Ecosystems Restoration</center></font>
+<font size=6 face="Times New Roman, Times, serif"><center>Office of Ecosystem Projects</center></font>
